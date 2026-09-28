@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+*.egg-info/
+
+# Node
+node_modules/
+frontend/dist/
+
+# Env / secrets
+.env
+
+# Django
+core/staticfiles/
+
+# Load test output
+loadtest/results/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
