@@ -29,6 +29,32 @@ def make_user():
 
 
 @pytest.fixture
+def make_users():
+    """Fast bulk users (no password hashing)."""
+
+    def _make(n):
+        User = get_user_model()
+        prefix = f"bulk{next(_seq)}_"
+        return User.objects.bulk_create([User(username=f"{prefix}{i}", password="!") for i in range(n)])
+
+    return _make
+
+
+@pytest.fixture
+def other_db():
+    """A second, independent PostgreSQL session on the test database (autocommit)."""
+    import psycopg
+    from django.db import connection
+
+    s = connection.settings_dict
+    conn = psycopg.connect(
+        dbname=s["NAME"], user=s["USER"], password=s["PASSWORD"], host=s["HOST"], port=s["PORT"], autocommit=True
+    )
+    yield conn
+    conn.close()
+
+
+@pytest.fixture
 def make_sale():
     def _make(total_stock=100, remaining=None, name="Phone"):
         product = Product.objects.create(name=name, price=Decimal("999.00"))

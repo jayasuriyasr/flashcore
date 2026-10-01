@@ -1,5 +1,16 @@
 name: flashcore
 
+# Shared settings for every container that runs the Django codebase.
+x-django: &django
+  build: ./core
+  image: flashcore-core:dev
+  env_file: .env
+  environment:
+    LUA_DIR: /lua
+  volumes:
+    - ./core:/app                   # dev: code changes apply without rebuilding
+    - ./gateway/app/lua:/lua:ro     # same Lua scripts as the gateway
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -74,22 +85,37 @@ services:
         /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --describe --topic order-events
     restart: "no"
 
-  web:
-    build: ./core
-    env_file: .env
-    environment:
-      LUA_DIR: /lua
-    command: >-
-      sh -c "python manage.py migrate --noinput &&
-             gunicorn core.wsgi:application --bind 0.0.0.0:8000 --workers 3 --reload"
-    ports:
-      - "8000:8000"
-    volumes:
-      - ./core:/app                   # dev: code changes apply without rebuilding
-      - ./gateway/app/lua:/lua:ro     # same Lua scripts as the gateway
+  # One-shot: applies Django migrations before any Django process starts.
+  migrate:
+    <<: *django
+    command: python manage.py migrate --noinput
     depends_on:
       postgres:
         condition: service_healthy
+    restart: "no"
+
+  web:
+    <<: *django
+    command: gunicorn core.wsgi:application --bind 0.0.0.0:8000 --workers 3 --reload
+    ports:
+      - "8000:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  # Kafka order-events -> PostgreSQL. Exits on DB errors without committing offsets;
+  # the restart policy brings it back and the batch is consumed again.
+  order-writer:
+    <<: *django
+    command: python manage.py consume_orders
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
 
