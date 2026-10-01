@@ -77,15 +77,33 @@ services:
   web:
     build: ./core
     env_file: .env
+    environment:
+      LUA_DIR: /lua
     command: >-
       sh -c "python manage.py migrate --noinput &&
              gunicorn core.wsgi:application --bind 0.0.0.0:8000 --workers 3 --reload"
     ports:
       - "8000:8000"
     volumes:
-      - ./core:/app          # dev: code changes apply without rebuilding
+      - ./core:/app                   # dev: code changes apply without rebuilding
+      - ./gateway/app/lua:/lua:ro     # same Lua scripts as the gateway
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  gateway:
+    build: ./gateway
+    env_file: .env
+    environment:
+      GATEWAY_WORKERS: "2"
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./gateway:/app                # tests live in /app/tests; restart the container after code changes
+    depends_on:
+      redis:
         condition: service_healthy
 
 volumes:

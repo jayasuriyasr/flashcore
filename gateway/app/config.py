@@ -1,0 +1,12 @@
+import os
+
+REDIS_URL = os.environ.get("REDIS_URL", "redis://redis:6379/0")
+REDIS_MAX_CONNECTIONS = int(os.environ.get("REDIS_MAX_CONNECTIONS", "200"))
+
+KAFKA_BOOTSTRAP = os.environ.get("KAFKA_BOOTSTRAP", "kafka:9092")
+KAFKA_ORDER_TOPIC = os.environ.get("KAFKA_ORDER_TOPIC", "order-events")
+PRODUCE_TIMEOUT_S = float(os.environ.get("PRODUCE_TIMEOUT_S", "2"))
+
+JWT_SIGNING_KEY = os.environ.get("JWT_SIGNING_KEY", "dev-only-change-me-0123456789abcdef")
+
+STOCK_TICK_S = float(os.environ.get("STOCK_TICK_S", "0.5"))

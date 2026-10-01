@@ -1,6 +1,12 @@
 import itertools
+import os
 from datetime import timedelta
 from decimal import Decimal
+
+# Tests use their own Redis database so they can flush it freely. The test DB's ids
+# restart at 1, which would collide with real sale:{id} keys in db 0.
+os.environ["REDIS_URL"] = os.environ.get("TEST_REDIS_URL", "redis://redis:6379/2")
+os.environ.setdefault("LUA_DIR", "/lua")
 
 import pytest
 from django.contrib.auth import get_user_model
@@ -41,3 +47,14 @@ def make_sale():
 @pytest.fixture
 def api():
     return APIClient()
+
+
+@pytest.fixture
+def redis_db():
+    from sales import redis_client as rc
+
+    r = rc.client()
+    assert r.connection_pool.connection_kwargs.get("db", 0) != 0, "refusing to flush Redis db 0"
+    r.flushdb()
+    yield r
+    r.flushdb()
