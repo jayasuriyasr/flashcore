@@ -119,6 +119,27 @@ services:
       redis:
         condition: service_healthy
 
+  # Order fulfilment (mock payment). Threads pool: the work is I/O-bound.
+  celery-worker:
+    <<: *django
+    command: celery -A core worker --loglevel=INFO --pool=threads --concurrency=${CELERY_CONCURRENCY:-16}
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  celery-beat:
+    <<: *django
+    command: celery -A core beat --loglevel=INFO --schedule=/tmp/celerybeat-schedule
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
   gateway:
     build: ./gateway
     env_file: .env

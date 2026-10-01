@@ -7,6 +7,9 @@ from decimal import Decimal
 # restart at 1, which would collide with real sale:{id} keys in db 0.
 os.environ["REDIS_URL"] = os.environ.get("TEST_REDIS_URL", "redis://redis:6379/2")
 os.environ.setdefault("LUA_DIR", "/lua")
+# Deterministic, fast mock payments unless a test says otherwise.
+os.environ["PAYMENT_FAILURE_RATE"] = "0"
+os.environ["MOCK_PAYMENT_DELAY_MS"] = "10"
 
 import pytest
 from django.contrib.auth import get_user_model
@@ -73,6 +76,17 @@ def make_sale():
 @pytest.fixture
 def api():
     return APIClient()
+
+
+@pytest.fixture(autouse=True)
+def enqueued(monkeypatch):
+    """Capture fulfilment hand-offs instead of sending them to the real Celery broker
+    (the running worker would look for test-DB orders in the real DB)."""
+    from sales import order_writer
+
+    calls = []
+    monkeypatch.setattr(order_writer, "enqueue_fulfilment", calls.append)
+    return calls
 
 
 @pytest.fixture

@@ -111,7 +111,15 @@ def _insert_single(event: OrderEvent) -> str | None:
         return "FAILED"
 
 
+def enqueue_fulfilment(order_id: str) -> None:
+    from .tasks import fulfil_order
+
+    fulfil_order.delay(order_id)
+
+
 def on_orders_committed(order_ids: list[str]) -> None:
-    """Called after the DB commit for every new PENDING order. Step 6 hands them to Celery."""
+    """Called after the DB commit: every new PENDING order goes to Celery for fulfilment."""
+    for order_id in order_ids:
+        enqueue_fulfilment(order_id)
     if order_ids:
         log.info("committed %d new orders", len(order_ids))
