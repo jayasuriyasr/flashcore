@@ -88,7 +88,7 @@ services:
   # One-shot: applies Django migrations before any Django process starts.
   migrate:
     <<: *django
-    command: python manage.py migrate --noinput
+    command: sh -c "python manage.py migrate --noinput && python manage.py collectstatic --noinput -v 0"
     depends_on:
       postgres:
         condition: service_healthy
@@ -140,18 +140,32 @@ services:
       redis:
         condition: service_healthy
 
+  # Two replicas behind nginx (no host port: reach it through http://localhost).
+  # `docker compose exec gateway ...` runs in replica 1; its own tests use localhost:8001 inside it.
   gateway:
     build: ./gateway
+    image: flashcore-gateway:dev
     env_file: .env
     environment:
       GATEWAY_WORKERS: "2"
-    ports:
-      - "8001:8001"
+    deploy:
+      replicas: 2
     volumes:
       - ./gateway:/app                # tests live in /app/tests; restart the container after code changes
     depends_on:
       redis:
         condition: service_healthy
+
+  nginx:
+    build:
+      context: .
+      dockerfile: nginx/Dockerfile
+    image: flashcore-nginx:dev
+    ports:
+      - "80:80"
+    depends_on:
+      - gateway
+      - web
 
 volumes:
   pg-data:

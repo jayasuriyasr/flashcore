@@ -1,0 +1,6 @@
+# Only used by builds whose context is the repo root (nginx). Allow-list what they need.
+**
+!frontend/
+!nginx/
+frontend/node_modules/
+frontend/dist/
