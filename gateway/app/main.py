@@ -59,9 +59,11 @@ async def buy(sale_id: int, request: Request, user_id: int = Depends(current_use
     # The return type lets FastAPI serialize straight to JSON bytes via Pydantic (fast path).
     redis: RedisOps = request.app.state.redis
     kafka: OrderEventProducer = request.app.state.kafka
+    started = time.perf_counter()
 
     # 1. Atomic stock gate in Redis.
     result = await redis.reserve(sale_id, user_id)
+    reserved_at = time.perf_counter()
     if result == 0:
         raise ApiError(409, "sold_out")
     if result == -1:
@@ -87,6 +89,14 @@ async def buy(sale_id: int, request: Request, user_id: int = Depends(current_use
         )
         raise ApiError(503, "try_again") from None
 
+    done = time.perf_counter()
+    if done - started > config.SLOW_BUY_S:
+        # Slow-request log: tells whether a slow buy waited on Redis or on the Kafka ack.
+        log.warning(
+            "slow buy: %.0f ms (redis %.0f ms, kafka ack %.0f ms)",
+            (done - started) * 1000, (reserved_at - started) * 1000, (done - reserved_at) * 1000,
+            extra={"order_id": order_id, "sale_id": sale_id},
+        )
     return Reserved(order_id=order_id)
 
 

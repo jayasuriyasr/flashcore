@@ -5,7 +5,10 @@
 param(
     [ValidateSet("throughput", "hot_item")][string]$Scenario = "throughput",
     [int]$Rate = 5000,
-    [int]$Seconds = 0
+    [int]$Seconds = 0,
+    # On a single machine Celery's fulfilment competes with the write path for the same CPUs.
+    # -PauseCelery stops the worker during the burst; it drains the backlog afterwards.
+    [switch]$PauseCelery
 )
 $ErrorActionPreference = 'Continue'   # native tools write warnings to stderr; we check exit codes
 Set-Location (Split-Path $PSScriptRoot -Parent)
@@ -23,7 +26,9 @@ function Manage([string[]]$cmdArgs) {
 }
 
 Write-Host "== Seeding $users load users (the first run takes a minute)" -ForegroundColor Cyan
-$seed = Manage @('seed_load_users', '--count', [string]$users)
+# One prefix per block size: a block is created in one go, so its ids are contiguous
+# (extending an older block would interleave with users created since).
+$seed = Manage @('seed_load_users', '--count', [string]$users, '--prefix', "u${users}_")
 $firstId = [regex]::Match($seed, 'first_id=(\d+)').Groups[1].Value
 
 Write-Host "== Creating a live sale with $stock units" -ForegroundColor Cyan
@@ -48,12 +53,19 @@ $statsJob = Start-Job -ScriptBlock {
     }
 } -ArgumentList $statsFile, $Seconds
 
+if ($PauseCelery) {
+    Write-Host "== Pausing celery-worker for the burst (fulfilment drains afterwards)" -ForegroundColor Cyan
+    docker compose stop celery-worker 2>&1 | Out-Null
+}
 Write-Host "== k6: $Scenario at $Rate req/s for $Seconds s" -ForegroundColor Cyan
 docker run --rm --network flashcore_default -v "${root}\loadtest:/loadtest" `
     -e SCENARIO=$Scenario -e SALE_ID=$saleId -e FIRST_USER_ID=$firstId -e JWT_SIGNING_KEY=$key `
     -e RATE=$Rate -e DURATION="${Seconds}s" `
     grafana/k6:latest run --summary-export=/loadtest/results/$summaryName /loadtest/buy.js
 $k6Exit = $LASTEXITCODE
+if ($PauseCelery) {
+    docker compose start celery-worker 2>&1 | Out-Null
+}
 Wait-Job $statsJob -Timeout 30 | Out-Null
 Remove-Job $statsJob -Force
 

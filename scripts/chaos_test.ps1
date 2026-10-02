@@ -23,7 +23,9 @@ function Manage([string[]]$cmdArgs) {
 }
 
 Write-Host "== Seeding load users" -ForegroundColor Cyan
-$seed = Manage @('seed_load_users', '--count', [string]($Rate * $Duration))
+$count = $Rate * $Duration
+# One prefix per block size: a block is created in one go, so its ids are contiguous.
+$seed = Manage @('seed_load_users', '--count', [string]$count, '--prefix', "u${count}_")
 $firstId = [regex]::Match($seed, 'first_id=(\d+)').Groups[1].Value
 Write-Host "   first user id: $firstId"
 

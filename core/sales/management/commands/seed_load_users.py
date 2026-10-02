@@ -40,5 +40,6 @@ class Command(BaseCommand):
             if suffix.isdigit() and int(suffix) <= count and user_id != first + int(suffix) - 1:
                 gaps += 1
         if gaps:
-            raise CommandError(f"ids are not contiguous ({gaps} mismatches); rerun with a new --prefix")
+            # Happens when an existing block is extended after other users were created.
+            raise CommandError(f"ids are not contiguous ({gaps} mismatches); use a new --prefix for this block size")
         self.stdout.write(self.style.SUCCESS(f"load users: {prefix}1..{prefix}{count} first_id={first} last_id={last}"))

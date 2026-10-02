@@ -90,22 +90,28 @@ async def test_stock_updates_are_throttled(client, r, make_sale):
 
 
 async def test_200_clients_connect_and_clean_up(client, make_sale):
+    # /health reports the count of whichever uvicorn worker answers, and real clients
+    # (e.g. an open browser tab) may be connected too: compare against a sampled baseline.
+    async def sample():
+        return [(await client.get("/health")).json()["ws_connections"] for _ in range(20)]
+
+    baseline = max(await sample())
     sale_id = make_sale(10)
     sockets = await asyncio.gather(*(connect(u, sale_id) for u in new_ids(200)))
     for ws in sockets:
         await recv_json(ws)
-    assert (await client.get("/health")).status_code == 200
+    during = await sample()
+    assert max(during) > baseline  # our sockets are being tracked
 
     await asyncio.gather(*(ws.close() for ws in sockets))
 
-    # /health reports the count of whichever uvicorn worker answers; sample several times.
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline:
-        counts = [(await client.get("/health")).json()["ws_connections"] for _ in range(10)]
-        if all(c == 0 for c in counts):
+        counts = await sample()
+        if max(counts) <= baseline:
             break
         await asyncio.sleep(0.5)
-    assert all(c == 0 for c in counts), counts
+    assert max(counts) <= baseline, (baseline, counts)
 
 
 async def test_one_dead_client_does_not_break_broadcasts(client, r, make_sale):

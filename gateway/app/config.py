@@ -10,3 +10,5 @@ PRODUCE_TIMEOUT_S = float(os.environ.get("PRODUCE_TIMEOUT_S", "2"))
 JWT_SIGNING_KEY = os.environ.get("JWT_SIGNING_KEY", "dev-only-change-me-0123456789abcdef")
 
 STOCK_TICK_S = float(os.environ.get("STOCK_TICK_S", "0.5"))
+
+SLOW_BUY_S = float(os.environ.get("SLOW_BUY_MS", "100")) / 1000  # log buys slower than this
