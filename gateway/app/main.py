@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from redis.exceptions import RedisError
 
 from . import config
 from .auth import InvalidToken, current_user, decode_user_id
@@ -40,6 +41,14 @@ async def api_error_handler(request: Request, exc: ApiError):
     return JSONResponse({"error": exc.code}, status_code=exc.status)
 
 
+@app.exception_handler(RedisError)
+async def redis_error_handler(request: Request, exc: RedisError):
+    # Redis restarting/unreachable: nothing was reserved, the client can simply retry.
+    # A clean 503 (instead of a crash) also keeps nginx from marking this replica dead.
+    log.warning("redis unavailable (%s)", type(exc).__name__)
+    return JSONResponse({"error": "try_again"}, status_code=503)
+
+
 class Reserved(BaseModel):
     order_id: str
     status: str = "RESERVED"
@@ -65,7 +74,12 @@ async def buy(sale_id: int, request: Request, user_id: int = Depends(current_use
         await kafka.send(sale_id, event)
     except SEND_ERRORS as exc:
         # Compensate: give the unit back so it can be sold again, and let the user retry.
-        await redis.release(sale_id, user_id)
+        try:
+            await redis.release(sale_id, user_id)
+        except RedisError:
+            # Redis is down too: the unit stays held (Redis below DB = safe undersell);
+            # End + Start the sale resyncs it.
+            log.error("could not release reservation", extra={"order_id": order_id, "sale_id": sale_id})
         log.warning(
             "produce failed (%s); reservation released",
             type(exc).__name__,
@@ -96,9 +110,12 @@ async def websocket_endpoint(ws: WebSocket, token: str = "", sale_id: int | None
     manager.add(ws, user_id, sale_id)
     try:
         if sale_id is not None:
-            remaining = await ws.app.state.redis.stock(sale_id)
-            manager.last_stock.setdefault(sale_id, remaining)
-            await ws.send_text(stock_message(sale_id, remaining))
+            try:
+                remaining = await ws.app.state.redis.stock(sale_id)
+                manager.last_stock.setdefault(sale_id, remaining)
+                await ws.send_text(stock_message(sale_id, remaining))
+            except RedisError:
+                pass  # the stock ticker sends it once Redis is back
         # We never expect messages from the client; receiving just tells us when it leaves.
         while True:
             message = await ws.receive()

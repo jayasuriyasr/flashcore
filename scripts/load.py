@@ -73,7 +73,8 @@ async def run(args) -> dict:
 
     latencies.sort()
     pct = lambda p: round(latencies[min(len(latencies) - 1, int(len(latencies) * p / 100))], 2) if latencies else None
-    errors = sum(n for code, n in statuses.items() if code == "503" or code.startswith("error"))
+    # Everything that is neither a clean yes (202) nor a clean no (409): 5xx and client errors.
+    errors = sum(n for code, n in statuses.items() if code.startswith(("5", "error")))
     return {
         "sale_id": args.sale_id,
         "requested": total,

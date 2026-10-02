@@ -1,3 +1,4 @@
+import functools
 import logging
 import os
 import random
@@ -18,16 +19,39 @@ from .models import FlashSale, Order
 log = logging.getLogger("sales.tasks")
 
 
-def mock_payment(order_id: str) -> bool:
-    """Pretend to charge the card. Counts attempts so tests can prove nobody is charged twice."""
+# The mock payment provider's side: one outcome per idempotency key, stored atomically.
+# payments:{key} counts real charges, so tests can prove nobody was ever charged twice.
+_PROVIDER_CHARGE_LUA = """
+if redis.call('SET', KEYS[1], ARGV[1], 'NX', 'EX', ARGV[2]) then
+  redis.call('INCR', KEYS[2])
+  redis.call('EXPIRE', KEYS[2], ARGV[2])
+  return ARGV[1]
+end
+return redis.call('GET', KEYS[1])
+"""
+
+
+@functools.cache
+def _provider_charge():
+    return rc.client().register_script(_PROVIDER_CHARGE_LUA)
+
+
+def mock_payment(idempotency_key: str) -> bool:
+    """Charge the card through a mock provider, using the order id as the idempotency key.
+
+    Found by the chaos test: a worker killed after the provider charged the card but before
+    our DB commit gets its task redelivered (acks_late), sees PENDING and pays again. Real
+    providers (e.g. Stripe's Idempotency-Key) return the first result for a repeated key
+    instead of charging twice; this mock does the same, atomically.
+    """
     failure_rate = float(os.environ.get("PAYMENT_FAILURE_RATE", "0.05"))
     delay_ms = int(os.environ.get("MOCK_PAYMENT_DELAY_MS", "100"))
-    pipe = rc.client().pipeline()
-    pipe.incr(f"payments:{order_id}")
-    pipe.expire(f"payments:{order_id}", 3600)
-    pipe.execute()
-    time.sleep(delay_ms / 1000)
-    return random.random() >= failure_rate
+    time.sleep(delay_ms / 1000)  # provider round trip
+    outcome = "declined" if random.random() < failure_rate else "approved"
+    stored = _provider_charge()(
+        keys=[f"payment:{idempotency_key}", f"payments:{idempotency_key}"], args=[outcome, 86400]
+    )
+    return stored == "approved"
 
 
 @shared_task(bind=True, acks_late=True, max_retries=30)
@@ -49,7 +73,7 @@ def fulfil(order_id: str) -> str | None:
     if order["status"] != Order.Status.PENDING:
         return order["status"]  # already handled by an earlier run
 
-    paid = mock_payment(order_id)
+    paid = mock_payment(idempotency_key=order_id)
 
     def finish():
         with connection.cursor() as cur:

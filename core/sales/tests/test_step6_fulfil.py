@@ -9,7 +9,7 @@ from sales import order_writer, services
 from sales import redis_client as rc
 from sales.models import FlashSale, Order
 from sales.order_writer import OrderEvent
-from sales.tasks import fulfil, fulfil_order
+from sales.tasks import fulfil, fulfil_order, mock_payment
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -70,6 +70,26 @@ def test_five_parallel_runs_charge_once(pending_order, redis_db):
     assert payments(redis_db, order) == 1
     order.refresh_from_db()
     assert order.status == "CONFIRMED"
+
+
+def test_redelivery_after_a_crash_does_not_charge_again(pending_order, redis_db):
+    """Found by the chaos test: the worker charged the card, then was killed before the DB
+    commit; Celery redelivers the task and the order is still PENDING."""
+    _, _, order = pending_order
+    assert mock_payment(idempotency_key=str(order.id)) is True  # the charge whose worker died
+
+    assert fulfil(str(order.id)) == "CONFIRMED"  # the redelivered task
+    assert payments(redis_db, order) == 1  # same idempotency key → no second charge
+
+
+def test_redelivery_reuses_the_first_outcome(pending_order, redis_db, monkeypatch):
+    _, _, order = pending_order
+    monkeypatch.setenv("PAYMENT_FAILURE_RATE", "1")
+    assert mock_payment(idempotency_key=str(order.id)) is False  # declined, then the worker died
+
+    monkeypatch.setenv("PAYMENT_FAILURE_RATE", "0")
+    assert fulfil(str(order.id)) == "FAILED"  # the provider replays "declined", no new attempt
+    assert payments(redis_db, order) == 1
 
 
 def test_failed_payment_returns_the_unit(pending_order, redis_db, monkeypatch):

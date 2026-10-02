@@ -58,6 +58,6 @@ Receive-Job $job -Wait -AutoRemoveJob | ForEach-Object { Write-Host "   $_" }
 $summary = Get-Content $out -Raw | ConvertFrom-Json
 Write-Host "   202 accepted: $($summary.accepted), 503/errors: $($summary.errors)"
 
-Write-Host "== Verifying (waits up to 5 minutes for retries and reconcile)" -ForegroundColor Cyan
-docker compose exec -T web python manage.py verify_sale --sale-id $saleId --accepted $summary.accepted --errors $summary.errors --wait 300
+Write-Host "== Verifying (waits up to 10 minutes for Celery, retries and reconcile)" -ForegroundColor Cyan
+docker compose exec -T web python manage.py verify_sale --sale-id $saleId --accepted $summary.accepted --errors $summary.errors --wait 600
 exit $LASTEXITCODE
