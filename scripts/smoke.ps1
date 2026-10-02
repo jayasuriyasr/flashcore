@@ -6,13 +6,11 @@ param(
     [int]$Users = 20,
     [string]$Base = "http://localhost"
 )
-$ErrorActionPreference = 'Stop'
+$ErrorActionPreference = 'Continue'   # native tools write warnings to stderr; we check exit codes
 Set-Location (Split-Path $PSScriptRoot -Parent)
 
 $venv = ".venv-tests"
-if (-not (Test-Path "$venv\Scripts\python.exe")) {
-    python -m venv $venv
-    & "$venv\Scripts\python.exe" -m pip install -q -r gateway/requirements-dev.txt
-}
+if (-not (Test-Path "$venv\Scripts\python.exe")) { python -m venv $venv }
+& "$venv\Scripts\python.exe" -m pip install -q -r scripts/requirements.txt
 & "$venv\Scripts\python.exe" scripts/smoke.py --base $Base --sale-id $SaleId --users $Users
 exit $LASTEXITCODE

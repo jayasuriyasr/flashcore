@@ -1,0 +1,3 @@
+# Host-side test tools (installed into .venv-tests by the scripts in this folder).
+-r ../gateway/requirements-dev.txt
+aiohttp>=3.10,<4

@@ -89,6 +89,10 @@ CELERY_TASK_REJECT_ON_WORKER_LOST = True     # a killed worker's task goes back 
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 CELERY_TASK_IGNORE_RESULT = True
 CELERY_BROKER_TRANSPORT_OPTIONS = {"visibility_timeout": 120}  # unacked tasks are redelivered after 2 min
+CELERY_WORKER_HIJACK_ROOT_LOGGER = False     # keep our JSON log format
+CELERY_BEAT_SCHEDULE = {
+    "reconcile": {"task": "sales.tasks.reconcile", "schedule": 60.0},
+}
 
 KAFKA_BOOTSTRAP = os.environ.get("KAFKA_BOOTSTRAP", "kafka:9092")
 KAFKA_ORDER_TOPIC = os.environ.get("KAFKA_ORDER_TOPIC", "order-events")
@@ -106,7 +110,7 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
-    "formatters": {"plain": {"format": "%(asctime)s %(levelname)s %(name)s %(message)s"}},
-    "handlers": {"console": {"class": "logging.StreamHandler", "formatter": "plain"}},
+    "formatters": {"json": {"()": "sales.log_format.JsonFormatter"}},
+    "handlers": {"console": {"class": "logging.StreamHandler", "formatter": "json"}},
     "root": {"handlers": ["console"], "level": "INFO"},
 }

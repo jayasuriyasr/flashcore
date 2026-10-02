@@ -99,6 +99,13 @@ services:
     command: gunicorn core.wsgi:application --bind 0.0.0.0:8000 --workers 3 --reload
     ports:
       - "8000:8000"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -152,6 +159,13 @@ services:
       replicas: 2
     volumes:
       - ./gateway:/app                # tests live in /app/tests; restart the container after code changes
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
     depends_on:
       redis:
         condition: service_healthy
@@ -163,9 +177,17 @@ services:
     image: flashcore-nginx:dev
     ports:
       - "80:80"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/nginx-health"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
     depends_on:
-      - gateway
-      - web
+      gateway:
+        condition: service_healthy
+      web:
+        condition: service_healthy
 
 volumes:
   pg-data:

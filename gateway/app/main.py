@@ -10,10 +10,11 @@ from . import config
 from .auth import InvalidToken, current_user, decode_user_id
 from .errors import ApiError
 from .kafka import SEND_ERRORS, OrderEventProducer
+from .logging_setup import configure_logging
 from .redis_ops import RedisOps
 from .ws import ConnectionManager, stock_message
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+configure_logging()
 log = logging.getLogger("gateway")
 
 

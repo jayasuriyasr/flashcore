@@ -1,14 +1,12 @@
 # Runs the tests marked "chaos" (they stop/start containers, so they run on the HOST).
 #   powershell -ExecutionPolicy Bypass -File scripts/run_chaos_tests.ps1
 # Needs: the stack running (docker compose up -d) and Python 3.12 on PATH.
-$ErrorActionPreference = 'Stop'
+$ErrorActionPreference = 'Continue'   # native tools write warnings to stderr; we check exit codes
 Set-Location (Split-Path $PSScriptRoot -Parent)
 
 $venv = ".venv-tests"
-if (-not (Test-Path "$venv\Scripts\python.exe")) {
-    python -m venv $venv
-    & "$venv\Scripts\python.exe" -m pip install -q -r gateway/requirements-dev.txt
-}
+if (-not (Test-Path "$venv\Scripts\python.exe")) { python -m venv $venv }
+& "$venv\Scripts\python.exe" -m pip install -q -r scripts/requirements.txt
 
 # Host-side addresses of the services published by docker-compose (the gateway is behind nginx).
 $env:GATEWAY_URL = "http://localhost"
