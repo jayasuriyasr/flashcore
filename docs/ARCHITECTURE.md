@@ -19,7 +19,7 @@ If a step needs to change a decision here, update this file in the same step.
 | `migrate` | one-shot | `migrate` + `collectstatic` before any Django process starts |
 | `web` | Django + gunicorn + whitenoise | Admin, JWT login, read-only sales/orders API, "Start sale" / "End sale" admin actions |
 | `order-writer` | Django management command `consume_orders` | Kafka → PostgreSQL batch writes in REPEATABLE READ txn |
-| `celery-worker` | Celery | `fulfil_order` (mock payment), stock release on failure, publishes updates |
+| `celery-worker` | Celery (prefork) | `fulfil_order` (mock payment with idempotency key), stock release on failure, publishes updates |
 | `celery-beat` | Celery beat | `reconcile` every 60 s |
 | `postgres` | PostgreSQL 16 | Source of truth |
 | `redis` | Redis 7 (AOF on) | Stock gate (Lua), locks, pub/sub, Celery broker (db 1) |
@@ -29,7 +29,7 @@ If a step needs to change a decision here, update this file in the same step.
 ## 3. Tech versions / libraries
 
 - Python 3.12 — Django 5, djangorestframework, djangorestframework-simplejwt, psycopg 3, confluent-kafka, celery 5, redis-py
-- Gateway — fastapi, uvicorn[standard] (uvloop), redis.asyncio, aiokafka, PyJWT, orjson
+- Gateway — fastapi, uvicorn[standard] (uvloop), redis.asyncio + hiredis, confluent-kafka (librdkafka), PyJWT, orjson
 - Tests — pytest, pytest-django, pytest-asyncio, httpx, websockets; host-side load tool uses aiohttp
   (httpx's async client managed only ~55 req/s on Windows, aiohttp ~1,700)
 - Frontend — React 18 + Vite
@@ -186,6 +186,19 @@ flash/
   reconcile lowers it; lost SADDs could let a user reserve twice → the partial unique index stops the
   second order. Lost INCRs (releases) leave Redis low → safe undersell.
 - **Celery is at-least-once.** Duplicate deliveries are absorbed by the per-order lock + status check.
+- **A worker can die after paying but before committing.** The redelivered task sees PENDING and
+  would pay again (the chaos test caught 27 double charges). The payment call carries an
+  **idempotency key = order id**; the (mock) provider returns the first outcome for a repeated key.
+
+## 12c. Changes forced by testing (see README "What the testing found")
+
+- Celery runs the **prefork** pool with `CELERY_DB_REUSE_MAX` (Celery otherwise closes the Django DB
+  connection after every task: one new PostgreSQL backend per order).
+- The gateway produces with **confluent-kafka (librdkafka)**, `linger.ms=15`, lz4; a dedicated poll
+  thread serves delivery callbacks and a separate thread does the `/health` liveness probe.
+- Redis errors in the gateway return **503 try_again**; nginx uses `max_fails=5 fail_timeout=2s` and
+  upstream keepalive 60 s, below uvicorn's `--timeout-keep-alive 75`.
+- The buy endpoint logs **slow buys** (> `SLOW_BUY_MS`, default 100) with the Redis vs Kafka-ack split.
 
 ## 13. Rules for every step
 
