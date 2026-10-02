@@ -184,7 +184,7 @@ services:
       - "80:80"
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost/nginx-health"]
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/nginx-health"]   # "localhost" resolves to IPv6 here; nginx listens on IPv4
       interval: 10s
       timeout: 3s
       retries: 6

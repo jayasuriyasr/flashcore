@@ -69,6 +69,8 @@ def make_sale(r):
 @pytest.fixture
 async def client():
     async with httpx.AsyncClient(
-        base_url=GATEWAY_URL, timeout=30, limits=httpx.Limits(max_connections=200)
+        base_url=GATEWAY_URL,
+        timeout=httpx.Timeout(30, pool=None),  # queued requests wait for a free connection
+        limits=httpx.Limits(max_connections=100),
     ) as c:
         yield c

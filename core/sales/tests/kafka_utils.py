@@ -15,13 +15,15 @@ def _admin():
 def create_topic(partitions=3) -> str:
     """A throwaway topic per test, so tests never read each other's (or real) events."""
     name = f"test-orders-{uuid.uuid4().hex[:10]}"
-    futures = _admin().create_topics([NewTopic(name, num_partitions=partitions, replication_factor=1)])
+    admin = _admin()  # keep a reference: if the client is garbage-collected the futures fail with _DESTROY
+    futures = admin.create_topics([NewTopic(name, num_partitions=partitions, replication_factor=1)])
     futures[name].result(timeout=20)
     return name
 
 
 def delete_topic(name: str) -> None:
-    _admin().delete_topics([name])[name].result(timeout=20)
+    admin = _admin()
+    admin.delete_topics([name])[name].result(timeout=20)
 
 
 def order_event(sale_id, user_id, order_id=None) -> dict:

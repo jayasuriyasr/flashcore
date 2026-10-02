@@ -17,8 +17,13 @@ async def test_health(client):
 async def test_oversell_1000_buyers_100_units(client, r, make_sale):
     sale_id = make_sale(100)
     users = new_ids(1000)
+    in_flight = asyncio.Semaphore(100)  # 100 concurrent requests is plenty to race; more just queues in httpx
 
-    responses = await asyncio.gather(*(buy(client, sale_id, u) for u in users))
+    async def limited_buy(u):
+        async with in_flight:
+            return await buy(client, sale_id, u)
+
+    responses = await asyncio.gather(*(limited_buy(u) for u in users))
     codes = [resp.status_code for resp in responses]
 
     assert codes.count(202) == 100
