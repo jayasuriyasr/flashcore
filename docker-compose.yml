@@ -7,6 +7,9 @@ x-django: &django
   env_file: .env
   environment:
     LUA_DIR: /lua
+    # Overridable from the shell for load tests, e.g. $env:MOCK_PAYMENT_DELAY_MS=5
+    MOCK_PAYMENT_DELAY_MS: ${MOCK_PAYMENT_DELAY_MS:-100}
+    PAYMENT_FAILURE_RATE: ${PAYMENT_FAILURE_RATE:-0.05}
   volumes:
     - ./core:/app                   # dev: code changes apply without rebuilding
     - ./gateway/app/lua:/lua:ro     # same Lua scripts as the gateway
@@ -14,6 +17,8 @@ x-django: &django
 services:
   postgres:
     image: postgres:16-alpine
+    # Celery threads + gunicorn + order writer + test runs each hold a connection.
+    command: ["postgres", "-c", "max_connections=200", "-c", "shared_buffers=256MB"]
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
@@ -154,9 +159,9 @@ services:
     image: flashcore-gateway:dev
     env_file: .env
     environment:
-      GATEWAY_WORKERS: "2"
+      GATEWAY_WORKERS: ${GATEWAY_WORKERS:-2}      # uvicorn processes per replica
     deploy:
-      replicas: 2
+      replicas: ${GATEWAY_REPLICAS:-2}
     volumes:
       - ./gateway:/app                # tests live in /app/tests; restart the container after code changes
     restart: unless-stopped

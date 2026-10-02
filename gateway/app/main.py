@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
 from . import config
 from .auth import InvalidToken, current_user, decode_user_id
@@ -39,8 +40,14 @@ async def api_error_handler(request: Request, exc: ApiError):
     return JSONResponse({"error": exc.code}, status_code=exc.status)
 
 
+class Reserved(BaseModel):
+    order_id: str
+    status: str = "RESERVED"
+
+
 @app.post("/api/sales/{sale_id}/buy", status_code=202)
-async def buy(sale_id: int, request: Request, user_id: int = Depends(current_user)):
+async def buy(sale_id: int, request: Request, user_id: int = Depends(current_user)) -> Reserved:
+    # The return type lets FastAPI serialize straight to JSON bytes via Pydantic (fast path).
     redis: RedisOps = request.app.state.redis
     kafka: OrderEventProducer = request.app.state.kafka
 
@@ -66,7 +73,7 @@ async def buy(sale_id: int, request: Request, user_id: int = Depends(current_use
         )
         raise ApiError(503, "try_again") from None
 
-    return {"order_id": order_id, "status": "RESERVED"}
+    return Reserved(order_id=order_id)
 
 
 @app.get("/api/sales/{sale_id}/stock")

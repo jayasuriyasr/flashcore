@@ -14,9 +14,10 @@ If a step needs to change a decision here, update this file in the same step.
 
 | Service (compose name) | Tech | Job |
 |---|---|---|
-| `nginx` | Nginx | Load balancer, serves React build, routes `/api/sales/{id}/buy` + `/ws` to gateway, rest to Django |
-| `gateway` | FastAPI + uvicorn | JWT check → Redis Lua reserve → Kafka produce → 202. WebSocket gateway. |
-| `web` | Django + gunicorn | Admin, JWT login, read-only sales/orders API, "Start sale" admin action |
+| `nginx` | Nginx 1.28 | Load balancer, serves React build, routes `/api/sales/{id}/buy|stock` + `/ws` to gateway, rest to Django |
+| `gateway` | FastAPI + uvicorn, **2 replicas** | JWT check → Redis Lua reserve → Kafka produce → 202. WebSocket gateway. |
+| `migrate` | one-shot | `migrate` + `collectstatic` before any Django process starts |
+| `web` | Django + gunicorn + whitenoise | Admin, JWT login, read-only sales/orders API, "Start sale" / "End sale" admin actions |
 | `order-writer` | Django management command `consume_orders` | Kafka → PostgreSQL batch writes in REPEATABLE READ txn |
 | `celery-worker` | Celery | `fulfil_order` (mock payment), stock release on failure, publishes updates |
 | `celery-beat` | Celery beat | `reconcile` every 60 s |
@@ -29,7 +30,8 @@ If a step needs to change a decision here, update this file in the same step.
 
 - Python 3.12 — Django 5, djangorestframework, djangorestframework-simplejwt, psycopg 3, confluent-kafka, celery 5, redis-py
 - Gateway — fastapi, uvicorn[standard] (uvloop), redis.asyncio, aiokafka, PyJWT, orjson
-- Tests — pytest, pytest-django, pytest-asyncio, httpx, websockets
+- Tests — pytest, pytest-django, pytest-asyncio, httpx, websockets; host-side load tool uses aiohttp
+  (httpx's async client managed only ~55 req/s on Windows, aiohttp ~1,700)
 - Frontend — React 18 + Vite
 - Load test — k6 (run via `grafana/k6` Docker image on the compose network)
 - Dev machine: Windows + Docker Desktop. All commands run via `docker compose`; tests run inside containers.
@@ -71,12 +73,16 @@ Order      (id UUID PK — gateway always sends its own, sale FK, user FK, statu
 | `sale:{id}:buyers` | set | user_ids who reserved |
 | `lock:order:{id}` | string (token) | Per-order lock, `SET NX PX 10000`, released by compare-and-delete Lua |
 | `lock:reconcile:{sale_id}` | string (token) | Stops two reconcile runs overlapping |
+| `payments:{order_id}` | string int | Mock-payment attempts (1 h TTL); proves nobody was charged twice |
 | channel `user:{id}` | pub/sub | Order status updates for one user |
 
-Lua scripts live in `gateway/app/lua/` (`reserve.lua`, `release.lua`); Django/Celery load the same files.
+Lua scripts live in `gateway/app/lua/`; Django/Celery read the same files through a read-only mount at `/lua`.
 
 `reserve.lua` → returns `1` reserved, `0` sold out / not started, `-1` already bought.
-`release.lua` → `INCR stock` + `SREM buyers` (undo of a reservation).
+`release.lua` → `SREM buyers` and, only if the user was there, `INCR stock` (idempotent; never recreates an ended sale).
+`lower_stock.lua` → lowers the counter to a target if it is higher; never raises it (reconcile).
+
+Tests use Redis **db 2** (flushed per test); the running stack uses db 0, Celery's broker db 1.
 
 ## 7. Buy flow
 
@@ -130,6 +136,7 @@ Bad/missing token → close with code 4401.
 | `GET /api/sales/{id}/stock` | gateway | reads Redis |
 | `GET /ws` | gateway | WebSocket |
 | `/admin/` | web | Django admin, "Start sale" / "End sale" actions |
+| `GET /health/` (web), `GET /health` (gateway) | both | Docker healthchecks; gateway also reports Kafka and its WebSocket count |
 
 ## 10. Consistency layers
 
@@ -137,12 +144,14 @@ Bad/missing token → close with code 4401.
 2. **Redis per-order lock** — Celery is at-least-once; lock + status check prevents double payment / double stock release.
 3. **PostgreSQL REPEATABLE READ + constraints** — snapshot reads (no phantoms in the invariant check), 40001 retry on concurrent updates, conditional UPDATE, `CHECK (remaining >= 0)`, `UNIQUE (sale, user)`.
 
-## 11. Reconcile (Celery beat, every 60 s, per active sale, under `lock:reconcile:{id}`)
+## 11. Reconcile (Celery beat, every 60 s, per sale, under `lock:reconcile:{id}`)
 
 - In one REPEATABLE READ txn read `remaining` and `count(non-FAILED orders)`; log an error if the invariant fails.
-- If Redis stock > DB remaining (unsafe direction) → atomically lower Redis to DB remaining (Lua: only lowers).
-  If Redis < DB remaining (safe direction) → log only; fixed by admin "Resync stock" when the sale is paused.
-- Re-enqueue `fulfil_order` for orders PENDING longer than 2 minutes.
+- If Redis stock > DB remaining (unsafe direction) → atomically lower Redis to DB remaining (`lower_stock.lua`).
+  If Redis < DB remaining (safe direction, also normal while events are in flight) → log only.
+  To resync fully: admin **End sale**, then **Start sale** (Start loads DB `remaining` and rebuilds the
+  buyers set from live orders, so nobody can buy twice).
+- Re-enqueue `fulfil_order` for orders PENDING longer than 2 minutes (safe: the task is idempotent).
 
 ## 12. Repo layout
 
@@ -150,22 +159,33 @@ Bad/missing token → close with code 4401.
 flash/
 ├─ docker-compose.yml   .env.example   README.md
 ├─ docs/ARCHITECTURE.md   docs/PLAN.md
-├─ nginx/nginx.conf
-├─ frontend/                 React + Vite
+├─ nginx/nginx.conf  nginx/Dockerfile        reverse proxy + React build (context = repo root)
+├─ frontend/                 React + Vite (src/pages/*, useSaleSocket.js, api.js)
 ├─ gateway/                  FastAPI (never imports Django)
-│  ├─ app/main.py  app/auth.py  app/redis_ops.py  app/kafka.py  app/ws.py
-│  ├─ app/lua/reserve.lua  app/lua/release.lua
-│  └─ tests/
+│  ├─ app/main.py  auth.py  redis_ops.py  kafka.py  ws.py  logging_setup.py
+│  ├─ app/lua/reserve.lua  release.lua  lower_stock.lua
+│  └─ tests/                 run against the live gateway (+ chaos test run from the host)
 ├─ core/                     Django project
-│  ├─ core/settings.py  core/celery.py
-│  └─ sales/ models.py admin.py api.py tasks.py locks.py
-│           management/commands/consume_orders.py
-│           management/commands/check_invariants.py
-│           management/commands/seed_load_users.py
-│           tests/
-├─ scripts/                  smoke / chaos helpers
-└─ loadtest/buy.js           k6
+│  ├─ core/settings.py  core/celery.py  core/urls.py (/health/)
+│  └─ sales/ models.py admin.py api.py services.py redis_client.py db.py
+│           order_writer.py tasks.py locks.py log_format.py
+│           management/commands/  consume_orders  check_invariants  create_demo
+│                                 smoke_test  seed_load_users  verify_sale
+│           tests/               test_step2_* … test_step9_*
+├─ scripts/                  check_infra.ps1, smoke.py/.ps1, load.py, chaos_test.ps1, run_chaos_tests.ps1
+└─ loadtest/                 buy.js (k6), run_k6.ps1
 ```
+
+## 12b. Known edge cases (good interview material)
+
+- **Kafka produce timeout is ambiguous.** The gateway waits 2 s for the ack; on timeout it releases the
+  reservation and returns 503, but the broker may still have stored the event. The order is then
+  created anyway; the DB's conditional `UPDATE` keeps stock correct, and `verify_sale --errors`
+  allows for it. Fix in production: idempotency key per buy + client retry with the same key.
+- **Redis restart (AOF `everysec`) can lose ≤ 1 s of writes.** Lost DECRs make Redis too high →
+  reconcile lowers it; lost SADDs could let a user reserve twice → the partial unique index stops the
+  second order. Lost INCRs (releases) leave Redis low → safe undersell.
+- **Celery is at-least-once.** Duplicate deliveries are absorbed by the per-order lock + status check.
 
 ## 13. Rules for every step
 
