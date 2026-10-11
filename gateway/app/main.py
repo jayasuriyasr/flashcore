@@ -4,6 +4,7 @@ import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from redis.exceptions import RedisError
@@ -34,6 +35,16 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="FlashCore gateway", lifespan=lifespan)
+
+if config.CORS_ALLOWED_ORIGINS:
+    # Frontend on another origin (Vercel). WebSockets are not subject to CORS; /ws checks the token.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=config.CORS_ALLOWED_ORIGINS,
+        allow_methods=["GET", "POST"],
+        allow_headers=["Authorization", "Content-Type"],
+        max_age=3600,  # one preflight per buy URL per hour
+    )
 
 
 @app.exception_handler(ApiError)

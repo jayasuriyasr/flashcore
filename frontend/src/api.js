@@ -1,5 +1,9 @@
 const TOKEN_KEY = "flashcore.token";
 
+// Backend origin, e.g. https://1-2-3-4.sslip.io, set at build time (Vercel). Empty = same origin:
+// local Docker, where nginx serves this app and proxies /api and /ws.
+const API_URL = (import.meta.env.VITE_API_URL || "").replace(/\/+$/, "");
+
 function readStoredToken() {
   try {
     return sessionStorage.getItem(TOKEN_KEY);
@@ -45,7 +49,7 @@ export class ApiError extends Error {
 async function request(path, { method = "GET", body, auth = false } = {}) {
   const headers = { "Content-Type": "application/json" };
   if (auth && token) headers.Authorization = `Bearer ${token}`;
-  const res = await fetch(path, { method, headers, body: body ? JSON.stringify(body) : undefined });
+  const res = await fetch(API_URL + path, { method, headers, body: body ? JSON.stringify(body) : undefined });
   let data = null;
   try {
     data = await res.json();
@@ -67,6 +71,7 @@ export const myOrders = () => request("/api/orders/mine/", { auth: true });
 export const buy = (id) => request(`/api/sales/${id}/buy`, { method: "POST", auth: true });
 
 export function wsUrl(saleId) {
-  const proto = window.location.protocol === "https:" ? "wss" : "ws";
-  return `${proto}://${window.location.host}/ws?token=${encodeURIComponent(token)}&sale_id=${saleId}`;
+  const base = API_URL ? new URL(API_URL) : window.location;
+  const proto = base.protocol === "https:" ? "wss" : "ws";
+  return `${proto}://${base.host}/ws?token=${encodeURIComponent(token)}&sale_id=${saleId}`;
 }

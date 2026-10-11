@@ -25,3 +25,8 @@ loadtest/results/
 Thumbs.db
 .vscode/
 .idea/
+
+# Deploy
+deploy/.out/
+frontend/.vercel/
+.demo-seeded

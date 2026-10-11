@@ -55,6 +55,17 @@ Open **http://localhost**, log in as `demo1` / `demo12345`, and open the sale. O
 browser (or a private window) as `demo2` and watch the stock drop live in both.
 Admin: **http://localhost/admin** ("Start sale" / "End sale" actions, live Redis stock column).
 
+## Deploy (free)
+
+React app on **Vercel**; the backend stack on an **Oracle Cloud Always Free** VM with HTTPS from
+Caddy + Let's Encrypt. Both cost nothing. Full guide: [docs/DEPLOY.md](docs/DEPLOY.md).
+
+```powershell
+powershell -ExecutionPolicy Bypass -File deploy/deploy_vm.ps1 -Server ubuntu@<vm-ip>          # backend
+powershell -ExecutionPolicy Bypass -File deploy/deploy_frontend.ps1 -ApiUrl https://<vm-ip-with-dashes>.sslip.io
+powershell -ExecutionPolicy Bypass -File deploy/deploy_vm.ps1 -Server ubuntu@<vm-ip> -Cors https://<project>.vercel.app
+```
+
 ## Testing everything (in this order)
 
 | # | What | Command |
@@ -147,7 +158,8 @@ frontend/   React (Vite)
 nginx/      reverse proxy + React build
 scripts/    infra check, smoke, load, chaos (PowerShell + Python)
 loadtest/   k6 script and runner
-docs/       architecture spec and build plan
+deploy/     free deployment: VM setup over SSH, Caddy, Vercel frontend, Cloudflare tunnel
+docs/       architecture spec, build plan, deployment guide
 ```
 
 ## Ports

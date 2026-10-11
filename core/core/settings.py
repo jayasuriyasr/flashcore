@@ -4,10 +4,23 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+def _csv(name, default=""):
+    # Unset or empty -> default (an empty DJANGO_ALLOWED_HOSTS in .env must not mean "no hosts").
+    return [item.strip() for item in (os.environ.get(name) or default).split(",") if item.strip()]
+
+
 SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "dev-insecure-secret")
 DEBUG = os.environ.get("DJANGO_DEBUG", "0") == "1"
-ALLOWED_HOSTS = ["*"]
-CSRF_TRUSTED_ORIGINS = ["http://localhost", "http://localhost:8000"]
+ALLOWED_HOSTS = _csv("DJANGO_ALLOWED_HOSTS", "*")
+CSRF_TRUSTED_ORIGINS = ["http://localhost", "http://localhost:8000", *_csv("CSRF_TRUSTED_ORIGINS")]
+
+# Deployed behind Caddy or Cloudflare (HTTPS) -> nginx (HTTP): trust their X-Forwarded-Proto.
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+SESSION_COOKIE_SECURE = not DEBUG
+CSRF_COOKIE_SECURE = not DEBUG
+
+# The React app on Vercel calls this API from another origin (docs/DEPLOY.md). Empty = same origin only.
+CORS_ALLOWED_ORIGINS = _csv("CORS_ALLOWED_ORIGINS")
 
 INSTALLED_APPS = [
     "django.contrib.admin",
@@ -17,10 +30,12 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "rest_framework",
+    "corsheaders",
     "sales",
 ]
 
 MIDDLEWARE = [
+    "corsheaders.middleware.CorsMiddleware",  # before CommonMiddleware, answers preflight requests
     "django.middleware.security.SecurityMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",  # serves admin CSS/JS from STATIC_ROOT under gunicorn
     "django.contrib.sessions.middleware.SessionMiddleware",

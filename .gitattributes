@@ -1,0 +1,3 @@
+# The deploy ships `git archive HEAD` to a Linux server; with core.autocrlf=true that archive
+# would contain CRLF line endings and break the shell scripts. LF everywhere.
+* text=auto eol=lf
