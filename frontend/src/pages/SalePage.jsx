@@ -9,6 +9,15 @@ const STATUS_TEXT = {
   FAILED: "Payment failed — the item went back on sale. You can try again.",
 };
 
+const FINAL = new Set(["CONFIRMED", "FAILED"]);
+
+// Updates arrive from three places (buy response, WebSocket, order reload) in any order:
+// never let a late, older one move the same order back from CONFIRMED/FAILED.
+function advance(current, next) {
+  if (current && current.id === next.id && FINAL.has(current.status) && !FINAL.has(next.status)) return current;
+  return next;
+}
+
 function useNow() {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
@@ -36,7 +45,7 @@ export default function SalePage({ saleId, onLogout }) {
     try {
       const orders = await myOrders(); // newest first
       const mine = orders.find((o) => o.sale === saleId);
-      if (mine) setOrder({ id: mine.id, status: mine.status });
+      if (mine) setOrder((current) => advance(current, { id: mine.id, status: mine.status }));
     } catch (err) {
       if (err.status === 401) onLogout();
     }
@@ -54,9 +63,16 @@ export default function SalePage({ saleId, onLogout }) {
 
   const connected = useSaleSocket(saleId, (msg) => {
     if (msg.type === "stock" && msg.sale_id === saleId) setRemaining(msg.remaining);
-    else if (msg.type === "order" && msg.sale_id === saleId) setOrder({ id: msg.order_id, status: msg.status });
+    else if (msg.type === "order" && msg.sale_id === saleId) {
+      setOrder((current) => advance(current, { id: msg.order_id, status: msg.status }));
+    }
     else if (msg.type === "auth_error") onLogout();
   });
+
+  // Order updates sent while the socket was down are not replayed: reload after every reconnect.
+  useEffect(() => {
+    if (connected) restoreOrder();
+  }, [connected, restoreOrder]);
 
   async function onBuy() {
     setBusy(true);
@@ -64,11 +80,7 @@ export default function SalePage({ saleId, onLogout }) {
     try {
       const result = await buy(saleId);
       // A WebSocket update may already have arrived for this order; don't move it backwards.
-      setOrder((current) =>
-        current && current.id === result.order_id && current.status !== "RESERVED"
-          ? current
-          : { id: result.order_id, status: "RESERVED" },
-      );
+      setOrder((current) => advance(current, { id: result.order_id, status: "RESERVED" }));
     } catch (err) {
       if (err.status === 401) onLogout();
       else if (err.code === "sold_out") setNotice("Sold out (or the sale hasn't started).");

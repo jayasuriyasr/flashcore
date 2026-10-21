@@ -73,7 +73,8 @@ Order      (id UUID PK — gateway always sends its own, sale FK, user FK, statu
 | `sale:{id}:buyers` | set | user_ids who reserved |
 | `lock:order:{id}` | string (token) | Per-order lock, `SET NX PX 10000`, released by compare-and-delete Lua |
 | `lock:reconcile:{sale_id}` | string (token) | Stops two reconcile runs overlapping |
-| `payments:{order_id}` | string int | Mock-payment attempts (1 h TTL); proves nobody was charged twice |
+| `payment:{order_id}` | string | Mock provider's stored outcome for an idempotency key (24 h TTL) |
+| `payments:{order_id}` | string int | Real (first-time) charges for that key (24 h TTL); tests prove it never exceeds 1 |
 | channel `user:{id}` | pub/sub | Order status updates for one user |
 
 Lua scripts live in `gateway/app/lua/`; Django/Celery read the same files through a read-only mount at `/lua`.
@@ -81,6 +82,7 @@ Lua scripts live in `gateway/app/lua/`; Django/Celery read the same files throug
 `reserve.lua` → returns `1` reserved, `0` sold out / not started, `-1` already bought.
 `release.lua` → `SREM buyers` and, only if the user was there, `INCR stock` (idempotent; never recreates an ended sale).
 `lower_stock.lua` → lowers the counter to a target if it is higher; never raises it (reconcile).
+`start_sale.lua` → if the sale is not live: rebuild the buyers set, then set the stock, in one atomic step.
 
 Tests use Redis **db 2** (flushed per test); the running stack uses db 0, Celery's broker db 1.
 
@@ -157,13 +159,13 @@ Bad/missing token → close with code 4401.
 
 ```
 flash/
-├─ docker-compose.yml   .env.example   README.md
-├─ docs/ARCHITECTURE.md   docs/PLAN.md
+├─ docker-compose.yml   docker-compose.prod.yml   .env.example   README.md
+├─ docs/ARCHITECTURE.md   docs/PLAN.md   docs/DEPLOY.md
 ├─ nginx/nginx.conf  nginx/Dockerfile        reverse proxy + React build (context = repo root)
 ├─ frontend/                 React + Vite (src/pages/*, useSaleSocket.js, api.js)
 ├─ gateway/                  FastAPI (never imports Django)
 │  ├─ app/main.py  auth.py  redis_ops.py  kafka.py  ws.py  logging_setup.py
-│  ├─ app/lua/reserve.lua  release.lua  lower_stock.lua
+│  ├─ app/lua/reserve.lua  release.lua  lower_stock.lua  start_sale.lua
 │  └─ tests/                 run against the live gateway (+ chaos test run from the host)
 ├─ core/                     Django project
 │  ├─ core/settings.py  core/celery.py  core/urls.py (/health/)
@@ -173,7 +175,8 @@ flash/
 │                                 smoke_test  seed_load_users  verify_sale
 │           tests/               test_step2_* … test_step9_*
 ├─ scripts/                  check_infra.ps1, smoke.py/.ps1, load.py, chaos_test.ps1, run_chaos_tests.ps1
-└─ loadtest/                 buy.js (k6), run_k6.ps1
+├─ loadtest/                 buy.js (k6), run_k6.ps1
+└─ deploy/                   deploy_vm.ps1 + server_setup.sh, Caddyfile, deploy_frontend.ps1, tunnel.ps1
 ```
 
 ## 12b. Known edge cases (good interview material)
@@ -189,6 +192,12 @@ flash/
 - **A worker can die after paying but before committing.** The redelivered task sees PENDING and
   would pay again (the chaos test caught 27 double charges). The payment call carries an
   **idempotency key = order id**; the (mock) provider returns the first outcome for a repeated key.
+- **Starting a sale used to take two steps** (`SET NX` the stock, then rebuild the buyers set). Buyers who
+  reserved in between were wiped from the set at the busiest moment of a sale and could reserve a second
+  unit; the partial unique index rejected the second order, so Redis undersold. Found in code review;
+  `start_sale.lua` now does both atomically.
+- **WebSocket messages are not replayed.** A status update sent while a browser was reconnecting is lost,
+  so the React page reloads the user's order after every (re)connect and never moves a final status back.
 
 ## 12c. Changes forced by testing (see README "What the testing found")
 
@@ -199,6 +208,15 @@ flash/
 - Redis errors in the gateway return **503 try_again**; nginx uses `max_fails=5 fail_timeout=2s` and
   upstream keepalive 60 s, below uvicorn's `--timeout-keep-alive 75`.
 - The buy endpoint logs **slow buys** (> `SLOW_BUY_MS`, default 100) with the Redis vs Kafka-ack split.
+
+## 12d. Deployment (docs/DEPLOY.md)
+
+- React on Vercel (static); the whole Compose stack on one VM with `docker-compose.prod.yml`: `DEBUG=0`, code baked
+  into images, no published ports except **Caddy** 80/443 (Let's Encrypt). Laptop alternative: a **Cloudflare quick
+  tunnel** container instead of Caddy.
+- The browser calls the API cross-origin: `CORS_ALLOWED_ORIGINS` (**django-cors-headers** on Django, Starlette's
+  `CORSMiddleware` on the gateway, added only when set). WebSockets need no CORS; `/ws` checks the JWT.
+- Behind the TLS proxy Django trusts `X-Forwarded-Proto` (nginx passes it through) for admin CSRF and secure cookies.
 
 ## 13. Rules for every step
 

@@ -81,6 +81,14 @@ powershell -ExecutionPolicy Bypass -File deploy/deploy_vm.ps1 -Server ubuntu@<pu
 ```
 
 Use the exact Vercel URL, with no trailing slash. Open it and log in as `demo1` / `demo12345`.
+The login page shows the demo accounts (visitors can't sign up); `deploy_frontend.ps1 -DemoLogin ""` hides it.
+
+**Before you share the link** (e.g. before an interview), give every demo account a fresh sale to buy from,
+since each account can buy once per sale:
+
+```powershell
+ssh ubuntu@<public-ip> "cd flashcore && sudo docker compose exec -T web python manage.py create_demo --stock 100 --users 50 --minutes 43200"
+```
 
 ### 5. Admin account (you)
 

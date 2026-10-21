@@ -48,16 +48,12 @@ def lower_stock(sale_id: int, target: int) -> int:
 
 
 def start_sale(sale_id: int, remaining: int, live_buyer_ids: list[int]) -> bool:
-    """Load stock into Redis. SET NX: a live sale is never reset (that would oversell)."""
-    r = client()
-    if not r.set(stock_key(sale_id), remaining, nx=True):
-        return False
-    pipe = r.pipeline(transaction=True)
-    pipe.delete(buyers_key(sale_id))
-    if live_buyer_ids:
-        pipe.sadd(buyers_key(sale_id), *live_buyer_ids)
-    pipe.execute()
-    return True
+    """Load stock and rebuild the buyers set atomically (start_sale.lua).
+
+    A live sale is never reset (that would oversell): returns False and changes nothing.
+    """
+    keys = [stock_key(sale_id), buyers_key(sale_id)]
+    return int(_script("start_sale")(keys=keys, args=[remaining, *live_buyer_ids])) == 1
 
 
 def end_sale(sale_id: int) -> bool:

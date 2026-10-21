@@ -1,6 +1,9 @@
 import { useState } from "react";
 import { login } from "../api.js";
 
+// Set at build time for the public demo (deploy/deploy_frontend.ps1); visitors can't sign up.
+const DEMO_LOGIN = import.meta.env.VITE_DEMO_LOGIN;
+
 export default function Login({ onLoggedIn }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -30,6 +33,7 @@ export default function Login({ onLoggedIn }) {
       <form className="card" onSubmit={onSubmit}>
         <h1>FlashCore</h1>
         <p className="muted">Log in to join the flash sale.</p>
+        {DEMO_LOGIN && <p className="muted">Demo accounts: {DEMO_LOGIN}</p>}
         <label>
           Username
           <input value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" />

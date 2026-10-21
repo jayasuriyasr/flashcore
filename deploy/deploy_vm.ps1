@@ -43,7 +43,9 @@ if ($LASTEXITCODE) { throw "server setup failed (exit $LASTEXITCODE)" }
 Write-Host "Checking https://$Site/api/sales/ from here ..."
 $ok = $false
 foreach ($i in 1..12) {   # Caddy needs a few seconds for the first certificate
-    curl.exe -fsS --max-time 10 "https://$Site/api/sales/" -o NUL 2>$null
+    # -s without -S: no stderr. Windows PowerShell turns redirected native stderr into a
+    # terminating error under ErrorActionPreference=Stop, which would end this retry loop.
+    curl.exe -fs --max-time 10 "https://$Site/api/sales/" -o NUL
     if ($LASTEXITCODE -eq 0) { $ok = $true; break }
     Start-Sleep -Seconds 5
 }

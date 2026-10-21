@@ -19,7 +19,14 @@ $ErrorActionPreference = "Stop"
 Set-Location (Split-Path $PSScriptRoot)
 $prod = @("-f", "docker-compose.yml", "-f", "docker-compose.prod.yml", "--profile", "tunnel")
 
-docker info *> $null
+# Windows PowerShell turns redirected native stderr into a terminating error under "Stop",
+# so commands whose stderr is redirected run with "Continue" and are checked by exit code.
+function Invoke-Quiet([scriptblock]$command) {
+    $ErrorActionPreference = "Continue"
+    & $command 2>&1 | Out-String
+}
+
+Invoke-Quiet { docker info } | Out-Null
 if ($LASTEXITCODE) { throw "Docker is not running: start Docker Desktop first" }
 
 if ($Stop) {
@@ -51,7 +58,7 @@ if ($LASTEXITCODE) { throw "docker compose up failed" }
 Write-Host "Waiting for the tunnel URL ..."
 $url = $null
 foreach ($i in 1..60) {
-    $logs = docker compose @prod logs cloudflared 2>&1 | Out-String
+    $logs = Invoke-Quiet { docker compose @prod logs cloudflared }
     $found = [regex]::Matches($logs, 'https://[a-z0-9-]+\.trycloudflare\.com')
     if ($found.Count) { $url = $found[$found.Count - 1].Value; break }
     Start-Sleep -Seconds 2
@@ -60,7 +67,8 @@ if (-not $url) { throw "no tunnel URL in 'docker compose logs cloudflared'" }
 Write-Host "Backend: $url" -ForegroundColor Green
 
 if (-not $SkipFrontend) {
-    & (Join-Path $PSScriptRoot "deploy_frontend.ps1") -ApiUrl $url
+    # README quick start creates demo1..demo20 locally
+    & (Join-Path $PSScriptRoot "deploy_frontend.ps1") -ApiUrl $url -DemoLogin "demo1 to demo20, password demo12345"
 }
 if (-not ((Get-Content .env) -match '^CORS_ALLOWED_ORIGINS=https')) {
     Write-Warning "CORS_ALLOWED_ORIGINS is not set: run again with -Cors https://<your-project>.vercel.app"

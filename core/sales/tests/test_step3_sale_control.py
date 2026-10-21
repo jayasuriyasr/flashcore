@@ -37,6 +37,18 @@ def test_start_sale_rebuilds_buyers_from_live_orders(make_sale, make_user, redis
     assert redis_db.smembers(rc.buyers_key(sale.id)) == {str(pending.id), str(confirmed.id)}
 
 
+def test_start_sale_sets_stock_and_buyers_in_one_step(redis_db):
+    # start_sale.lua: a buyer can never reserve between "stock loaded" and "buyers rebuilt"
+    # (that gap used to wipe their reservation from the set and let them reserve twice).
+    buyers = list(range(1, 20_001))
+    assert rc.start_sale(424242, 7, buyers) is True
+    assert redis_db.get(rc.stock_key(424242)) == "7"
+    assert redis_db.scard(rc.buyers_key(424242)) == 20_000
+    assert rc.start_sale(424242, 99, []) is False  # live: untouched
+    assert redis_db.get(rc.stock_key(424242)) == "7"
+    assert redis_db.scard(rc.buyers_key(424242)) == 20_000
+
+
 def test_end_sale_removes_stock_key(make_sale, redis_db):
     sale = make_sale(total_stock=10)
     services.start_sale(sale)
