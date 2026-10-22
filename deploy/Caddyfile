@@ -1,5 +1,12 @@
 # HTTPS in front of nginx. Caddy obtains and renews a Let's Encrypt certificate for SITE_ADDRESS,
 # redirects HTTP to HTTPS, proxies WebSockets, and sets X-Forwarded-Proto: https for Django.
+{
+	servers {
+		# Only TCP 80/443 are published and opened in the cloud firewall: don't advertise HTTP/3 (UDP).
+		protocols h1 h2
+	}
+}
+
 {$SITE_ADDRESS} {
 	encode zstd gzip
 	reverse_proxy nginx:80

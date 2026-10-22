@@ -18,6 +18,9 @@ CSRF_TRUSTED_ORIGINS = ["http://localhost", "http://localhost:8000", *_csv("CSRF
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 SESSION_COOKIE_SECURE = not DEBUG
 CSRF_COOKIE_SECURE = not DEBUG
+# `check --deploy`: the HTTP -> HTTPS redirect is Caddy's job (a Django redirect would also hit the
+# plain-HTTP health checks inside Docker), and HSTS stays off for throwaway sslip.io/tunnel hostnames.
+SILENCED_SYSTEM_CHECKS = ["security.W004", "security.W008"]
 
 # The React app on Vercel calls this API from another origin (docs/DEPLOY.md). Empty = same origin only.
 CORS_ALLOWED_ORIGINS = _csv("CORS_ALLOWED_ORIGINS")
@@ -132,4 +135,6 @@ LOGGING = {
     "formatters": {"json": {"()": "sales.log_format.JsonFormatter"}},
     "handlers": {"console": {"class": "logging.StreamHandler", "formatter": "json"}},
     "root": {"handlers": ["console"], "level": "INFO"},
+    # One INFO line per HTTP request drowns the smoke test's own output.
+    "loggers": {"httpx": {"level": "WARNING"}},
 }

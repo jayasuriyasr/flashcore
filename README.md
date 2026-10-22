@@ -82,6 +82,13 @@ powershell -ExecutionPolicy Bypass -File deploy/deploy_vm.ps1 -Server ubuntu@<vm
 
 Any time: `docker compose exec web python manage.py check_invariants`.
 
+**Last full run (2026-10-22, fresh Docker install):** all 9 steps passed: Django 73/73, gateway 26/26 + both
+chaos tests, 200-buy smoke, 20/20 WebSocket users through nginx, chaos run (26,926 orders, 0 lost,
+0 duplicates, 0 double charges), hot item exactly 1,000/1,000 sold. Production mode
+(`docker-compose.prod.yml` + Caddy on `https://localhost`) was checked too: HTTP→HTTPS redirect, `DEBUG` off,
+CORS allow-list on Django and the gateway, admin CSRF over HTTPS, buy + WebSocket through Caddy,
+`check --deploy` clean.
+
 ### Load-test settings
 
 Restart the stack with load-test settings before steps 8–9 (more gateway processes, fast mock
