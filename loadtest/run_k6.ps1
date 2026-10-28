@@ -16,7 +16,10 @@ $root = (Get-Location).Path
 
 if ($Seconds -eq 0) { $Seconds = if ($Scenario -eq "hot_item") { 20 } else { 60 } }
 $stock = if ($Scenario -eq "hot_item") { 1000 } else { 1000000 }
-$users = $Rate * $Seconds
+# One user per request, plus one second of margin: k6's constant-arrival-rate can start
+# Rate*Seconds + 1 iterations, and the extra one used to hit an unseeded user id (its order
+# was correctly dropped by the order writer, but the run reported 60,001 accepted vs 60,000 stored).
+$users = $Rate * ($Seconds + 1)
 $key = ((Get-Content .env | Where-Object { $_ -match '^JWT_SIGNING_KEY=' }) -split '=', 2)[1]
 
 function Manage([string[]]$cmdArgs) {
@@ -61,7 +64,7 @@ Write-Host "== k6: $Scenario at $Rate req/s for $Seconds s" -ForegroundColor Cya
 docker run --rm --network flashcore_default -v "${root}\loadtest:/loadtest" `
     -e SCENARIO=$Scenario -e SALE_ID=$saleId -e FIRST_USER_ID=$firstId -e JWT_SIGNING_KEY=$key `
     -e RATE=$Rate -e DURATION="${Seconds}s" `
-    grafana/k6:latest run --summary-export=/loadtest/results/$summaryName /loadtest/buy.js
+    grafana/k6:2.3.0 run --summary-export=/loadtest/results/$summaryName /loadtest/buy.js
 $k6Exit = $LASTEXITCODE
 if ($PauseCelery) {
     docker compose start celery-worker 2>&1 | Out-Null

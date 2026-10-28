@@ -82,9 +82,11 @@ powershell -ExecutionPolicy Bypass -File deploy/deploy_vm.ps1 -Server ubuntu@<vm
 
 Any time: `docker compose exec web python manage.py check_invariants`.
 
-**Last full run (2026-10-22, fresh Docker install):** all 9 steps passed: Django 73/73, gateway 26/26 + both
+**Last full run (2026-10-28):** all 9 steps passed: infra + persistence, Django 73/73, gateway 26/26 + both
 chaos tests, 200-buy smoke, 20/20 WebSocket users through nginx, chaos run (26,926 orders, 0 lost,
-0 duplicates, 0 double charges), hot item exactly 1,000/1,000 sold. Production mode
+0 duplicates, 0 double charges), throughput 1,000 req/s for 60 s (all 60,001 orders stored, p99 57 ms),
+hot item exactly 1,000/1,000 sold. Also verified: Postgres, Redis and Kafka restart by themselves after a
+crash or reboot. Production mode
 (`docker-compose.prod.yml` + Caddy on `https://localhost`) was checked too: HTTP→HTTPS redirect, `DEBUG` off,
 CORS allow-list on Django and the gateway, admin CSRF over HTTPS, buy + WebSocket through Caddy,
 `check --deploy` clean.
@@ -106,13 +108,14 @@ production the workers run elsewhere. `loadtest/results/*-docker-stats.csv` show
 was busiest; `docker compose logs gateway | Select-String "slow buy"` shows whether slow buys
 waited on Redis or on the Kafka ack.
 
-## Results (measured 2026-10-02)
+## Results (measured 2026-10-02, re-measured 2026-10-28)
 
 **Machine:** one laptop, AMD Ryzen 5 7535HS (6 cores / 12 threads), Windows 11, Docker Desktop
 (WSL2, 12 CPUs, 7.4 GiB). All 11 services **and** the k6 load generator run on it, through nginx.
 
 | Scenario (k6, through nginx) | Achieved | p50 | p95 | p99 | Errors | Integrity |
 |---|---|---|---|---|---|---|
+| 1,000 req/s for 60 s (2026-10-28) | 1,000 req/s | 14.5 ms | 21.4 ms | **57.4 ms** | 0 | all 60,001 orders stored + fulfilled |
 | 1,000 req/s for 30 s | 1,000 req/s | 18 ms | 43 ms | 80 ms | 0 | all 30,000 orders stored + fulfilled |
 | 1,500 req/s for 60 s | 1,451 req/s | 23 ms | 512 ms | 866 ms | 0 | all 87,474 orders stored + fulfilled |
 | 2,000 req/s for 30 s ¹ | 1,997 req/s | 25 ms | 166 ms | 276 ms | 0 | all 59,945 orders stored + fulfilled |
@@ -125,7 +128,7 @@ waited on Redis or on the Kafka ack.
 ² order writer restarted, Celery worker `kill -9`'d and restarted, Redis restarted mid-run.
 ³ p99 is dominated by the seconds while Redis is restarting.
 
-**Honest summary:** on this laptop the write path sustains ~1,000 req/s with p99 ≈ 80 ms and
+**Honest summary:** on this laptop the write path sustains ~1,000 req/s with p99 ≈ 57–80 ms and
 tops out at ~2,300 req/s with zero errors; the **5,000 req/s / p99 < 50 ms target was not
 reached** here. Above ~1,000 req/s the tail is dominated by host-level stalls (Windows + Docker
 VM + 11 containers + k6 sharing 6 cores); at saturation the CPUs are full (gateways ~2.5 cores
@@ -146,6 +149,7 @@ no lost or duplicate order, nobody charged twice.
 | nginx error log | keep-alive race (uvicorn 5 s < nginx 60 s) reset connections | uvicorn `--timeout-keep-alive 75` |
 | code review | starting a sale set the stock, *then* rebuilt the buyers set: buyers in that gap could reserve twice (DB rejected the 2nd order, so Redis undersold) | `start_sale.lua` does both atomically |
 | code review | an order update sent while the browser's WebSocket was reconnecting was lost (page stuck on "confirming") | reload the order after every reconnect; statuses never move backwards |
+| k6 run | 60,001 requests for 60,000 seeded users: k6 can start Rate×Seconds + 1 iterations, and the extra one used an unseeded user id (the order writer correctly dropped it as a bad event) | seed one extra second of users; pin `grafana/k6:2.3.0` |
 | laptop reboot | after a shutdown Docker restarted the app containers but **not** Postgres, Redis or Kafka (no restart policy): the site stayed down. On a cloud VM any maintenance reboot would do the same | `restart: unless-stopped` on every long-running service; verified by crashing each data store |
 | code review | deploy script's HTTPS check crashed on its first failed attempt (Windows PowerShell + redirected stderr) | no stderr redirect; checked by exit code |
 
