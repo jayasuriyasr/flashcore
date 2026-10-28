@@ -15,8 +15,12 @@ x-django: &django
     - ./gateway/app/lua:/lua:ro     # same Lua scripts as the gateway
 
 services:
+  # unless-stopped on every long-running service: after a host reboot (laptop shutdown, cloud VM
+  # maintenance) Docker starts them again. Without it on postgres/redis/kafka, a reboot brought the
+  # app containers back but not their data stores.
   postgres:
     image: postgres:16-alpine
+    restart: unless-stopped
     # Celery threads + gunicorn + order writer + test runs each hold a connection.
     command: ["postgres", "-c", "max_connections=200", "-c", "shared_buffers=256MB"]
     environment:
@@ -35,6 +39,7 @@ services:
 
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
     ports:
       - "6379:6379"
@@ -48,6 +53,7 @@ services:
 
   kafka:
     image: apache/kafka:3.8.1
+    restart: unless-stopped
     environment:
       CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk   # any base64 16-byte id; fixed so restarts reuse the same log dir
       KAFKA_NODE_ID: 1

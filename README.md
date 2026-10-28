@@ -146,6 +146,7 @@ no lost or duplicate order, nobody charged twice.
 | nginx error log | keep-alive race (uvicorn 5 s < nginx 60 s) reset connections | uvicorn `--timeout-keep-alive 75` |
 | code review | starting a sale set the stock, *then* rebuilt the buyers set: buyers in that gap could reserve twice (DB rejected the 2nd order, so Redis undersold) | `start_sale.lua` does both atomically |
 | code review | an order update sent while the browser's WebSocket was reconnecting was lost (page stuck on "confirming") | reload the order after every reconnect; statuses never move backwards |
+| laptop reboot | after a shutdown Docker restarted the app containers but **not** Postgres, Redis or Kafka (no restart policy): the site stayed down. On a cloud VM any maintenance reboot would do the same | `restart: unless-stopped` on every long-running service; verified by crashing each data store |
 | code review | deploy script's HTTPS check crashed on its first failed attempt (Windows PowerShell + redirected stderr) | no stderr redirect; checked by exit code |
 
 ## Useful commands
