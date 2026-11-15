@@ -30,3 +30,6 @@ Thumbs.db
 deploy/.out/
 frontend/.vercel/
 .demo-seeded
+
+# CI
+.venv-ci/

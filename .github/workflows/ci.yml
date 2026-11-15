@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    # The whole stack (PostgreSQL, Redis, Kafka, Django, Celery, 2 gateway replicas, nginx) runs in
+    # Docker on the runner; the tests run inside the containers, the chaos tests from the runner.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build, start and test (including chaos tests)
+        run: CHAOS=1 bash scripts/ci.sh
+
+      - name: Container logs
+        if: failure()
+        run: docker compose logs --tail 200
