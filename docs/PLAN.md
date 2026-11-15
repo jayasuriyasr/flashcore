@@ -1,6 +1,6 @@
 # FlashCore — 10-Step Implementation Plan
 
-Every step has a **Build prompt** and a **Test prompt**. Paste them into Claude Code (opened in `D:\flash`) one at a time.
+Every step has a **Build prompt** and a **Test prompt**. Work through them one at a time.
 All prompts rely on `docs/ARCHITECTURE.md`, so a fresh session per step is fine.
 
 ## How to use
