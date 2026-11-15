@@ -8,8 +8,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 # Dev dependencies are included on purpose: tests run inside this container.
-COPY requirements.txt requirements-dev.txt ./
-RUN pip install -r requirements-dev.txt
+# constraints.txt pins every package (direct and transitive) to the tested versions: without it a
+# rebuild picked up Celery 5.7, which needs redis-py 6, and the worker crash-looped.
+COPY requirements.txt requirements-dev.txt constraints.txt ./
+RUN pip install -r requirements-dev.txt -c constraints.txt
 
 COPY . .
 
@@ -19,4 +21,7 @@ EXPOSE 8001
 # --timeout-keep-alive must be LONGER than nginx's upstream keepalive_timeout (60 s): with
 # uvicorn's default 5 s, nginx sometimes reused a pooled connection just as uvicorn closed it
 # ("connection reset by peer"), and a burst of those made nginx mark the replica down.
-CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port 8001 --workers ${GATEWAY_WORKERS:-2} --loop uvloop --http httptools --no-access-log --timeout-keep-alive 75"]
+# Prometheus multiprocess mode (app/metrics.py): one sample file per worker process in this
+# directory, emptied on start so samples from a previous run don't leak into the new one.
+ENV PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus
+CMD ["sh", "-c", "rm -rf \"$PROMETHEUS_MULTIPROC_DIR\" && mkdir -p \"$PROMETHEUS_MULTIPROC_DIR\" && exec uvicorn app.main:app --host 0.0.0.0 --port 8001 --workers ${GATEWAY_WORKERS:-2} --loop uvloop --http httptools --no-access-log --timeout-keep-alive 75"]

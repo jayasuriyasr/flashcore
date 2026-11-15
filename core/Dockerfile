@@ -8,8 +8,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 # Dev dependencies are included on purpose: tests run inside this container.
-COPY requirements.txt requirements-dev.txt ./
-RUN pip install -r requirements-dev.txt
+# constraints.txt pins every package (direct and transitive) to the tested versions: without it a
+# rebuild picked up Celery 5.7, which needs redis-py 6, and the worker crash-looped.
+COPY requirements.txt requirements-dev.txt constraints.txt ./
+RUN pip install -r requirements-dev.txt -c constraints.txt
 
 COPY . .
 

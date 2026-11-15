@@ -6,7 +6,7 @@ Set-Location (Split-Path $PSScriptRoot -Parent)
 
 $venv = ".venv-tests"
 if (-not (Test-Path "$venv\Scripts\python.exe")) { python -m venv $venv }
-& "$venv\Scripts\python.exe" -m pip install -q -r scripts/requirements.txt
+& "$venv\Scripts\python.exe" -m pip install -q -r scripts/requirements.txt -c scripts/constraints.txt
 
 # Host-side addresses of the services published by docker-compose (the gateway is behind nginx).
 $env:GATEWAY_URL = "http://localhost"

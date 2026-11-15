@@ -1,0 +1,45 @@
+# Exact versions of every dependency, so a rebuild next month installs what was tested.
+# Regenerate (see README, Updating dependencies): uv pip compile requirements-dev.txt --universal --python-version 3.12 -o constraints.txt
+amqp==5.4.1
+anyio==4.15.1
+asgiref==3.12.1
+billiard==4.3.1
+celery==5.6.3
+certifi==2026.10.19
+click==8.5.0
+click-didyoumean==0.3.1
+click-plugins==1.1.1.2
+click-repl==0.4.1
+colorama==0.4.6 ; sys_platform == 'win32'
+confluent-kafka==2.16.0
+django==5.1.15
+django-cors-headers==4.9.0
+djangorestframework==3.17.2
+djangorestframework-simplejwt==5.5.1
+gunicorn==23.0.0
+h11==0.16.0
+httpcore==1.0.9
+httpx==0.28.1
+idna==3.20
+iniconfig==2.3.1
+kombu==5.6.2
+packaging==26.3
+pluggy==1.7.0
+prometheus-client==0.26.0
+prompt-toolkit==3.0.53
+psycopg==3.3.6
+psycopg-binary==3.3.6 ; implementation_name != 'pypy'
+pygments==2.21.0
+pyjwt==2.15.1
+pytest==8.4.2
+pytest-django==4.14.0
+python-dateutil==3.0.0
+redis==5.3.1
+six==1.17.0
+sqlparse==0.6.0
+typing-extensions==4.16.0
+tzdata==2026.5
+tzlocal==5.4.4
+vine==5.1.0
+wcwidth==0.9.3
+whitenoise==6.12.0
