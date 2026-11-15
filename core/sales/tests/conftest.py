@@ -81,11 +81,13 @@ def api():
 @pytest.fixture(autouse=True)
 def enqueued(monkeypatch):
     """Capture fulfilment hand-offs instead of sending them to the real Celery broker
-    (the running worker would look for test-DB orders in the real DB)."""
-    from sales import order_writer
+    (the running worker would look for test-DB orders in the real DB), and don't let the
+    running stack's real queue length decide whether stuck orders are re-sent."""
+    from sales import order_writer, tasks
 
     calls = []
     monkeypatch.setattr(order_writer, "enqueue_fulfilment", calls.append)
+    monkeypatch.setattr(tasks, "fulfilment_queue_depth", lambda: 0)
     return calls
 
 
