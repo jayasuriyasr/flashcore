@@ -5,7 +5,9 @@ REDIS_MAX_CONNECTIONS = int(os.environ.get("REDIS_MAX_CONNECTIONS", "200"))
 
 KAFKA_BOOTSTRAP = os.environ.get("KAFKA_BOOTSTRAP", "kafka:9092")
 KAFKA_ORDER_TOPIC = os.environ.get("KAFKA_ORDER_TOPIC", "order-events")
-PRODUCE_TIMEOUT_S = float(os.environ.get("PRODUCE_TIMEOUT_S", "2"))
+PRODUCE_TIMEOUT_S = float(os.environ.get("PRODUCE_TIMEOUT_S", "2"))  # a buy waits this long for the ack
+# librdkafka keeps trying to deliver for this long, then reports the message as failed.
+KAFKA_MESSAGE_TIMEOUT_S = float(os.environ.get("KAFKA_MESSAGE_TIMEOUT_S", "30"))
 
 JWT_SIGNING_KEY = os.environ.get("JWT_SIGNING_KEY", "dev-only-change-me-0123456789abcdef")
 

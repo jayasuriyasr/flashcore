@@ -17,6 +17,8 @@ BUYS = Counter("flashcore_buy_requests", "Buy requests by outcome", ["outcome"])
 BUY_SECONDS = Histogram("flashcore_buy_duration_seconds", "Time to answer a buy (inside the gateway)", buckets=BUCKETS)
 STAGE_SECONDS = Histogram("flashcore_buy_stage_seconds", "Time per buy stage: redis reserve, kafka ack",
                           ["stage"], buckets=BUCKETS)
+LATE_KAFKA = Counter("flashcore_late_kafka_outcomes",
+                     "Buys answered 503 before Kafka's verdict, by what happened in the end", ["outcome"])
 WS_CONNECTIONS = Gauge("flashcore_ws_connections", "Open WebSocket connections", multiprocess_mode="livesum")
 
 

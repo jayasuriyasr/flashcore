@@ -1,8 +1,15 @@
 # Chaos test: steady buy load while services are restarted/killed, then prove nothing was lost,
 # duplicated, oversold or double-charged.
 #   powershell -ExecutionPolicy Bypass -File scripts/chaos_test.ps1
+#   powershell -ExecutionPolicy Bypass -File scripts/chaos_test.ps1 -Scenario kafka-ha
+#     kills Kafka brokers instead; needs the replicated cluster:
+#     docker compose -f docker-compose.yml -f docker-compose.ha.yml up -d
+#   powershell -ExecutionPolicy Bypass -File scripts/chaos_test.ps1 -Scenario postgres-down
+#     stops PostgreSQL for 30 s mid-load: buys must keep being accepted (the gateway never
+#     touches PostgreSQL) and every order must be written once it is back.
 # Needs the full stack running (docker compose up -d) and Python 3.12 on PATH.
 param(
+    [ValidateSet("services", "kafka-ha", "postgres-down")][string]$Scenario = "services",
     [int]$Rate = 300,
     [int]$Duration = 90,
     [int]$Stock = 30000
@@ -10,10 +17,12 @@ param(
 $ErrorActionPreference = 'Continue'   # native tools write warnings to stderr; we check exit codes
 Set-Location (Split-Path $PSScriptRoot -Parent)
 $root = (Get-Location).Path
+# The broker services only exist with the HA file.
+$dc = if ($Scenario -eq "kafka-ha") { @("-f", "docker-compose.yml", "-f", "docker-compose.ha.yml") } else { @() }
 
 $venv = ".venv-tests"
 if (-not (Test-Path "$venv\Scripts\python.exe")) { python -m venv $venv }
-& "$venv\Scripts\python.exe" -m pip install -q -r scripts/requirements.txt
+& "$venv\Scripts\python.exe" -m pip install -q -r scripts/requirements.txt -c scripts/constraints.txt
 $py = (Resolve-Path "$venv\Scripts\python.exe").Path
 
 function Manage([string[]]$cmdArgs) {
@@ -51,10 +60,21 @@ function At([int]$second, [string]$what, [scriptblock]$action) {
     Write-Host ("   [{0,3}s] {1}" -f $second, $what) -ForegroundColor Yellow
     & $action 2>&1 | Out-Null
 }
-At 20 "restart order-writer"   { docker compose restart order-writer }
-At 40 "kill -9 celery-worker"  { docker compose kill celery-worker }
-At 50 "start celery-worker"    { docker compose start celery-worker }
-At 60 "restart redis"          { docker compose restart redis }
+if ($Scenario -eq "kafka-ha") {
+    # Each kill takes away the leader of about a third of the partitions mid-burst.
+    At 20 "kill -9 kafka-3 (1 of 3 brokers)"           { docker compose @dc kill kafka-3 }
+    At 40 "start kafka-3"                              { docker compose @dc start kafka-3 }
+    At 55 "kill -9 kafka (broker 1, the first bootstrap address)" { docker compose @dc kill kafka }
+    At 75 "start kafka"                                { docker compose @dc start kafka }
+} elseif ($Scenario -eq "postgres-down") {
+    At 20 "stop postgres"   { docker compose stop postgres }
+    At 50 "start postgres"  { docker compose start postgres }
+} else {
+    At 20 "restart order-writer"   { docker compose restart order-writer }
+    At 40 "kill -9 celery-worker"  { docker compose kill celery-worker }
+    At 50 "start celery-worker"    { docker compose start celery-worker }
+    At 60 "restart redis"          { docker compose restart redis }
+}
 
 Receive-Job $job -Wait -AutoRemoveJob | ForEach-Object { Write-Host "   $_" }
 $summary = Get-Content $out -Raw | ConvertFrom-Json

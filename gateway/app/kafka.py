@@ -15,7 +15,16 @@ log = logging.getLogger("gateway.kafka")
 
 
 class KafkaUnavailable(Exception):
-    pass
+    """Definitely not written: the message never left this process."""
+
+
+class AckPending(Exception):
+    """No verdict from Kafka within the request's wait. librdkafka keeps trying for up to
+    message.timeout.ms; `future` resolves (ack) or fails (gave up) when the real outcome is known."""
+
+    def __init__(self, future: asyncio.Future):
+        super().__init__("no broker acknowledgement yet")
+        self.future = future
 
 
 def _resolve(future: asyncio.Future, err) -> None:
@@ -32,11 +41,16 @@ class OrderEventProducer:
 
     produce() only queues the message in librdkafka; a background thread calls poll(),
     which runs the delivery callbacks, and each callback resolves the waiting request's
-    asyncio future. Kafka being down never blocks startup: messages fail after
-    message.timeout.ms and the buy endpoint answers 503.
+    asyncio future. Kafka being down never blocks startup.
+
+    Two different timeouts, on purpose:
+    - timeout_s: how long a buy request waits for the ack before answering 503.
+    - message_timeout_s: how long librdkafka keeps trying to deliver. Much longer, so that its
+      final report is the real outcome. When both were 2 s, messages already sent to a broker that
+      stalled (a replica had just died) were reported as failed and then written anyway.
     """
 
-    def __init__(self, bootstrap: str, topic: str, timeout_s: float):
+    def __init__(self, bootstrap: str, topic: str, timeout_s: float, message_timeout_s: float = 30.0):
         self.topic = topic
         self.timeout_s = timeout_s
         self.producer = Producer({
@@ -48,7 +62,7 @@ class OrderEventProducer:
             # cores on request overhead alone.
             "linger.ms": 15,
             "compression.type": "lz4",
-            "message.timeout.ms": int(timeout_s * 1000),  # give up (→ 503) after this
+            "message.timeout.ms": int(message_timeout_s * 1000),  # then report the message as failed
         })
         self.connected = False
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -81,7 +95,11 @@ class OrderEventProducer:
             self._stop.wait(5)
 
     async def send(self, sale_id: int, event: dict) -> None:
-        """Wait for the broker ack. Raises KafkaUnavailable, KafkaException or TimeoutError."""
+        """Wait for the broker ack.
+
+        Raises KafkaUnavailable / KafkaException when the event was not written, and AckPending
+        when there is no verdict yet (the caller must not treat that as a failure).
+        """
         if self._loop is None:
             raise KafkaUnavailable("producer not started")
         future = self._loop.create_future()
@@ -97,7 +115,11 @@ class OrderEventProducer:
             raise KafkaUnavailable("local producer queue is full") from None
         except KafkaException as exc:
             raise KafkaUnavailable(str(exc)) from None
-        await asyncio.wait_for(future, timeout=self.timeout_s + 0.5)
+        try:
+            # shield: on timeout the future stays alive for the delivery report that is still coming.
+            await asyncio.wait_for(asyncio.shield(future), timeout=self.timeout_s)
+        except TimeoutError:
+            raise AckPending(future) from None
 
     async def stop(self) -> None:
         self._stop.set()
@@ -106,4 +128,4 @@ class OrderEventProducer:
         await asyncio.to_thread(self.producer.flush, 2)
 
 
-SEND_ERRORS = (KafkaUnavailable, KafkaException, TimeoutError)
+SEND_ERRORS = (KafkaUnavailable, KafkaException)  # the event was not written
