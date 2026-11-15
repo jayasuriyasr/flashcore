@@ -1,0 +1,17 @@
+# Scrapes every gateway replica (DNS returns one address per replica) and Django's business metrics.
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: gateway
+    dns_sd_configs:
+      - names: [gateway]
+        type: A
+        port: 8001
+        refresh_interval: 10s
+
+  - job_name: web
+    metrics_path: /metrics/
+    static_configs:
+      - targets: ["web:8000"]

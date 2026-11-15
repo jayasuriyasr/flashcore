@@ -47,6 +47,14 @@ services:
   nginx:
     ports: !reset []
 
+  # Dashboards stay private on a server: Grafana listens on the VM's localhost only, reached with
+  #   ssh -L 3000:localhost:3000 ubuntu@<vm>   then http://localhost:3000
+  prometheus:
+    ports: !reset []
+  grafana:
+    ports: !override
+      - "127.0.0.1:3000:3000"
+
   # Cloud VM: HTTPS with a free, auto-renewed Let's Encrypt certificate for SITE_ADDRESS
   # (e.g. 1-2-3-4.sslip.io, a free hostname that resolves to 1.2.3.4).
   caddy:

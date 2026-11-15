@@ -40,7 +40,11 @@ def check_routing(base: str, sale_id: int) -> list[str]:
 async def journey(base: str, sale_id: int, username: str, password: str, timeout: float) -> str:
     ws_base = base.replace("http", "ws", 1)
     async with httpx.AsyncClient(base_url=base, timeout=15) as c:
-        r = await c.post("/api/auth/token/", json={"username": username, "password": password})
+        for attempt in range(6):
+            r = await c.post("/api/auth/token/", json={"username": username, "password": password})
+            if r.status_code != 429:
+                break
+            await asyncio.sleep(1 + attempt)  # nginx limits logins per IP: back off like a real client
         if r.status_code != 200:
             return f"login -> {r.status_code}"
         token = r.json()["access"]

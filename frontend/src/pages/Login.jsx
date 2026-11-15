@@ -22,7 +22,9 @@ export default function Login({ onLoggedIn }) {
       await login(username, password);
       onLoggedIn();
     } catch (err) {
-      setError(err.status === 401 ? "Wrong username or password." : "Could not log in. Is the server running?");
+      if (err.status === 401) setError("Wrong username or password.");
+      else if (err.status === 429) setError("Too many login attempts. Wait a few seconds and try again.");
+      else setError("Could not log in. Is the server running?");
     } finally {
       setBusy(false);
     }

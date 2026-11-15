@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 from redis.exceptions import RedisError
 
@@ -14,6 +14,7 @@ from .auth import InvalidToken, current_user, decode_user_id
 from .errors import ApiError
 from .kafka import SEND_ERRORS, OrderEventProducer
 from .logging_setup import configure_logging
+from .metrics import BUY_SECONDS, BUYS, STAGE_SECONDS, render
 from .redis_ops import RedisOps
 from .ws import ConnectionManager, stock_message
 
@@ -47,8 +48,14 @@ if config.CORS_ALLOWED_ORIGINS:
     )
 
 
+def _is_buy(request: Request) -> bool:
+    return request.url.path.endswith("/buy")
+
+
 @app.exception_handler(ApiError)
 async def api_error_handler(request: Request, exc: ApiError):
+    if _is_buy(request):
+        BUYS.labels(exc.code).inc()  # sold_out, already_purchased, unauthorized, try_again
     return JSONResponse({"error": exc.code}, status_code=exc.status)
 
 
@@ -57,6 +64,8 @@ async def redis_error_handler(request: Request, exc: RedisError):
     # Redis restarting/unreachable: nothing was reserved, the client can simply retry.
     # A clean 503 (instead of a crash) also keeps nginx from marking this replica dead.
     log.warning("redis unavailable (%s)", type(exc).__name__)
+    if _is_buy(request):
+        BUYS.labels("redis_unavailable").inc()
     return JSONResponse({"error": "try_again"}, status_code=503)
 
 
@@ -68,13 +77,19 @@ class Reserved(BaseModel):
 @app.post("/api/sales/{sale_id}/buy", status_code=202)
 async def buy(sale_id: int, request: Request, user_id: int = Depends(current_user)) -> Reserved:
     # The return type lets FastAPI serialize straight to JSON bytes via Pydantic (fast path).
-    redis: RedisOps = request.app.state.redis
-    kafka: OrderEventProducer = request.app.state.kafka
     started = time.perf_counter()
+    try:
+        return await reserve_and_record(sale_id, user_id, request.app.state.redis, request.app.state.kafka, started)
+    finally:
+        BUY_SECONDS.observe(time.perf_counter() - started)  # every outcome, 202s and 409s/503s alike
 
+
+async def reserve_and_record(sale_id: int, user_id: int, redis: RedisOps, kafka: OrderEventProducer,
+                             started: float) -> Reserved:
     # 1. Atomic stock gate in Redis.
     result = await redis.reserve(sale_id, user_id)
     reserved_at = time.perf_counter()
+    STAGE_SECONDS.labels("redis").observe(reserved_at - started)
     if result == 0:
         raise ApiError(409, "sold_out")
     if result == -1:
@@ -101,6 +116,8 @@ async def buy(sale_id: int, request: Request, user_id: int = Depends(current_use
         raise ApiError(503, "try_again") from None
 
     done = time.perf_counter()
+    STAGE_SECONDS.labels("kafka").observe(done - reserved_at)
+    BUYS.labels("reserved").inc()
     if done - started > config.SLOW_BUY_S:
         # Slow-request log: tells whether a slow buy waited on Redis or on the Kafka ack.
         log.warning(
@@ -109,6 +126,12 @@ async def buy(sale_id: int, request: Request, user_id: int = Depends(current_use
             extra={"order_id": order_id, "sale_id": sale_id},
         )
     return Reserved(order_id=order_id)
+
+
+@app.get("/metrics", include_in_schema=False)
+async def metrics():
+    body, content_type = render()
+    return Response(body, media_type=content_type)
 
 
 @app.get("/api/sales/{sale_id}/stock")

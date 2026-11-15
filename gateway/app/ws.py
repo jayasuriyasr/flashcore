@@ -13,6 +13,7 @@ from collections import defaultdict
 import orjson
 from fastapi import WebSocket
 
+from .metrics import WS_CONNECTIONS
 from .redis_ops import RedisOps, stock_key
 
 log = logging.getLogger("gateway.ws")
@@ -40,6 +41,7 @@ class ConnectionManager:
 
     def add(self, ws: WebSocket, user_id: int, sale_id: int | None) -> None:
         self.meta[ws] = (user_id, sale_id)
+        WS_CONNECTIONS.inc()
         self.by_user[user_id].add(ws)
         if sale_id is not None:
             self.by_sale[sale_id].add(ws)
@@ -48,6 +50,7 @@ class ConnectionManager:
         info = self.meta.pop(ws, None)
         if info is None:
             return
+        WS_CONNECTIONS.dec()
         user_id, sale_id = info
         sockets = self.by_user.get(user_id)
         if sockets is not None:
