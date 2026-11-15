@@ -1,0 +1,37 @@
+# Comparison only, not part of the system (docs/SCALING.md): the same buy endpoint as one plain
+# PostgreSQL transaction per buy, reached through the same nginx at /baseline/... so both designs are
+# measured the same way.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.baseline.yml up -d --build
+#   powershell -ExecutionPolicy Bypass -File loadtest/run_k6.ps1 -Target baseline -Rate 1000 -Seconds 30
+#
+# Plain `docker compose up -d --remove-orphans` goes back to the normal stack.
+
+services:
+  baseline:
+    build: ./baseline
+    image: flashcore-baseline:dev
+    env_file: .env
+    environment:
+      BASELINE_WORKERS: ${BASELINE_WORKERS:-6}   # = gateway processes in the load-test settings (2 x 3)
+      BASELINE_SYNCHRONOUS_COMMIT: ${BASELINE_SYNCHRONOUS_COMMIT:-on}   # "off" trades durability for speed
+    volumes:
+      - ./baseline:/app
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8002/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  nginx:
+    volumes:
+      - ./nginx/baseline/upstream.conf:/etc/nginx/upstreams.d/baseline.conf:ro
+      - ./nginx/baseline/location.conf:/etc/nginx/locations.d/baseline.conf:ro
+    depends_on:
+      baseline:
+        condition: service_healthy
