@@ -32,6 +32,8 @@ If a step needs to change a decision here, update this file in the same step.
 - Gateway — fastapi, uvicorn[standard] (uvloop), redis.asyncio + hiredis, confluent-kafka (librdkafka), PyJWT, orjson
 - Tests — pytest, pytest-django, pytest-asyncio, httpx, websockets; host-side load tool uses aiohttp
   (httpx's async client managed only ~55 req/s on Windows, aiohttp ~1,700)
+- Metrics — prometheus-client in the gateway (multiprocess mode) and Django; Prometheus + Grafana (opt-in profile)
+- Every image installs with `-c constraints.txt` (exact versions of all direct and transitive packages)
 - Frontend — React 18 + Vite
 - Load test — k6 (run via `grafana/k6` Docker image on the compose network)
 - Dev machine: Windows + Docker Desktop. All commands run via `docker compose`; tests run inside containers.
@@ -46,6 +48,8 @@ KAFKA_BOOTSTRAP=kafka:9092
 JWT_SIGNING_KEY=dev-only-change-me        # shared by Django (sign) and gateway (verify), HS256
 PAYMENT_FAILURE_RATE=0.05                 # mock payment; tests set 0 or 1
 MOCK_PAYMENT_DELAY_MS=100                 # mock payment latency; load tests use 5
+PRODUCE_TIMEOUT_S=2                       # optional: how long a buy waits for Kafka's ack (HA mode: 8)
+KAFKA_MESSAGE_TIMEOUT_S=30                # optional: how long the Kafka client keeps trying to deliver
 ```
 
 Host ports (dev): nginx 80, web 8000, gateway 8001 (removed once gateway is scaled behind nginx), postgres 5432, redis 6379, kafka 9094 (EXTERNAL listener).
@@ -92,8 +96,12 @@ Tests use Redis **db 2** (flushed per test); the running stack uses db 0, Celery
 1. React → `POST /api/sales/{id}/buy` with `Authorization: Bearer <JWT>`.
 2. Gateway verifies JWT locally (HS256, claim `user_id`) — no DB.
 3. Gateway runs `reserve.lua`. `0` → 409 `sold_out`, `-1` → 409 `already_purchased`.
-4. `1` → create `order_id` (uuid4), produce to Kafka (`acks=all`, idempotent producer, key = `sale_id`, 2 s timeout).
-   Produce fails → run `release.lua`, return 503.
+4. `1` → create `order_id` (uuid4), produce to Kafka (`acks=all`, idempotent producer, key = `sale_id`).
+   - Ack within 2 s (`PRODUCE_TIMEOUT_S`) → step 5.
+   - Not written (e.g. local queue full) → run `release.lua`, return 503.
+   - No verdict within 2 s → return 503 but **keep the reservation**: the Kafka client keeps trying for
+     30 s (`KAFKA_MESSAGE_TIMEOUT_S`). Late ack → the order proceeds (a retry gets 409 `already_purchased`);
+     client gives up → `release.lua` then.
 5. Return `202 {"order_id": ..., "status": "RESERVED"}`.
 
 **Async:**
@@ -139,6 +147,9 @@ Bad/missing token → close with code 4401.
 | `GET /ws` | gateway | WebSocket |
 | `/admin/` | web | Django admin, "Start sale" / "End sale" actions |
 | `GET /health/` (web), `GET /health` (gateway) | both | Docker healthchecks; gateway also reports Kafka and its WebSocket count |
+| `GET /metrics/` (web), `GET /metrics` (gateway) | both | Prometheus; not routed by nginx (internal only) |
+
+nginx rate-limits `POST /api/auth/token/` and `/admin/login/` to 5 requests/s per client IP (burst 30, then 429).
 
 ## 10. Consistency layers
 
@@ -175,16 +186,25 @@ flash/
 │                                 smoke_test  seed_load_users  verify_sale
 │           tests/               test_step2_* … test_step9_*
 ├─ scripts/                  check_infra.ps1, smoke.py/.ps1, load.py, chaos_test.ps1, run_chaos_tests.ps1
-├─ loadtest/                 buy.js (k6), run_k6.ps1
-└─ deploy/                   deploy_vm.ps1 + server_setup.sh, Caddyfile, deploy_frontend.ps1, tunnel.ps1
+├─ loadtest/                 buy.js (k6), run_k6.ps1 (-Target system | baseline)
+├─ deploy/                   deploy_vm.ps1 + server_setup.sh, Caddyfile, deploy_frontend.ps1, tunnel.ps1
+├─ baseline/                 comparison only: the same buy endpoint as one PostgreSQL transaction (docs/SCALING.md)
+├─ observability/            prometheus.yml, Grafana provisioning + dashboard
+├─ docker-compose.ha.yml     3 Kafka brokers, replication factor 3, min.insync.replicas 2
+├─ docker-compose.baseline.yml
+├─ .github/workflows/ci.yml  runs scripts/ci.sh (build, tests, smoke, chaos tests) on every push
+└─ Makefile                  the common commands for Linux/macOS
 ```
 
 ## 12b. Known edge cases (good interview material)
 
-- **Kafka produce timeout is ambiguous.** The gateway waits 2 s for the ack; on timeout it releases the
-  reservation and returns 503, but the broker may still have stored the event. The order is then
-  created anyway; the DB's conditional `UPDATE` keeps stock correct, and `verify_sale --errors`
-  allows for it. Fix in production: idempotency key per buy + client retry with the same key.
+- **Kafka produce timeout is ambiguous.** No ack within 2 s does not mean "not written". The first
+  version released the reservation on timeout; killing a broker under load then produced 4,608 orders
+  for buyers who had been told "try again" (the event was committed a few seconds later, for a unit
+  already back on sale). Now the reservation is kept until the Kafka client's own verdict (step 4 above).
+  Residual case: a message still in flight when the 30 s delivery window ends; the DB's conditional
+  `UPDATE`, the unique index and reconcile keep stock correct, and `verify_sale --errors` allows for it.
+  Complete fix: an idempotency key sent by the client, so a retry is matched to the first attempt.
 - **Redis restart (AOF `everysec`) can lose ≤ 1 s of writes.** Lost DECRs make Redis too high →
   reconcile lowers it; lost SADDs could let a user reserve twice → the partial unique index stops the
   second order. Lost INCRs (releases) leave Redis low → safe undersell.
@@ -205,6 +225,8 @@ flash/
   connection after every task: one new PostgreSQL backend per order).
 - The gateway produces with **confluent-kafka (librdkafka)**, `linger.ms=15`, lz4; a dedicated poll
   thread serves delivery callbacks and a separate thread does the `/health` liveness probe.
+- A 503 on a Kafka timeout **keeps the reservation** until the Kafka client reports the real outcome
+  (found by `chaos_test.ps1 -Scenario kafka-ha`; docs/SCALING.md section 2b).
 - Redis errors in the gateway return **503 try_again**; nginx uses `max_fails=5 fail_timeout=2s` and
   upstream keepalive 60 s, below uvicorn's `--timeout-keep-alive 75`.
 - The buy endpoint logs **slow buys** (> `SLOW_BUY_MS`, default 100) with the Redis vs Kafka-ack split.
@@ -217,6 +239,25 @@ flash/
 - The browser calls the API cross-origin: `CORS_ALLOWED_ORIGINS` (**django-cors-headers** on Django, Starlette's
   `CORSMiddleware` on the gateway, added only when set). WebSockets need no CORS; `/ws` checks the JWT.
 - Behind the TLS proxy Django trusts `X-Forwarded-Proto` (nginx passes it through) for admin CSRF and secure cookies.
+
+## 12e. Operability (added after an interview-style review)
+
+- **Metrics.** Gateway: `flashcore_buy_requests_total{outcome}`, `flashcore_buy_duration_seconds`,
+  `flashcore_buy_stage_seconds{stage=redis|kafka}`, `flashcore_ws_connections`. uvicorn runs several
+  processes per container, so prometheus-client's multiprocess mode merges them. Django computes at scrape
+  time: `flashcore_orders{status}`, `flashcore_orders_pending_over_1m`, `flashcore_sale_remaining{source}`
+  (PostgreSQL vs Redis per live sale) and `flashcore_order_writer_lag` (Kafka end offsets minus the
+  order writer's committed offsets).
+- **Kafka replication.** `docker-compose.ha.yml` swaps the single broker for 3 (KRaft, combined
+  broker+controller), `order-events` with replication factor 3 and `min.insync.replicas=2`. With the
+  producer's `acks=all`, an acknowledged buy is on at least 2 brokers, so any one broker can die.
+- **Reproducible builds.** Version ranges in `requirements*.txt` state intent; `constraints.txt` pins
+  what was tested. Found the hard way: a rebuild three weeks later installed Celery 5.7, whose Redis
+  transport needs redis-py 6, and the worker crash-looped.
+- **CI.** `scripts/ci.sh` is the single definition of "the tests pass": GitHub Actions and a laptop run
+  the same script.
+- **Baseline.** `baseline/` implements the simplest correct design, so the architecture is justified by
+  a measurement instead of an assumption (docs/SCALING.md section 1).
 
 ## 13. Rules for every step
 
